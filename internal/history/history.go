@@ -78,8 +78,12 @@ func Record(path, hostName string, now time.Time) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// Recent returns up to n distinct host names, newest first.
+// Recent returns up to n distinct host names, newest first. Assumes entries
+// are pre-sorted by timestamp (newest first).
 func Recent(entries []Entry, n int) []string {
+	if n <= 0 {
+		return nil
+	}
 	var out []string
 	seen := make(map[string]bool)
 	for _, e := range entries {

@@ -68,6 +68,28 @@ func TestRecentDedupes(t *testing.T) {
 	}
 }
 
+func TestRecentWithNZeroReturnsNil(t *testing.T) {
+	entries := []Entry{
+		{Host: "a", Timestamp: ts("2026-08-10T12:00:00Z")},
+		{Host: "b", Timestamp: ts("2026-08-10T11:00:00Z")},
+	}
+	got := Recent(entries, 0)
+	if got != nil {
+		t.Fatalf("got %v, want nil", got)
+	}
+}
+
+func TestRecentWithNegativeReturnsNil(t *testing.T) {
+	entries := []Entry{
+		{Host: "a", Timestamp: ts("2026-08-10T12:00:00Z")},
+		{Host: "b", Timestamp: ts("2026-08-10T11:00:00Z")},
+	}
+	got := Recent(entries, -1)
+	if got != nil {
+		t.Fatalf("got %v, want nil", got)
+	}
+}
+
 func TestLastConnected(t *testing.T) {
 	entries := []Entry{
 		{Host: "a", Timestamp: ts("2026-08-10T10:00:00Z")},
