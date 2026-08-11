@@ -136,3 +136,15 @@ func TestEditorDoneTriggersReload(t *testing.T) {
 		t.Fatalf("host list not refreshed: %+v", h)
 	}
 }
+
+func TestCtrlEWithEditorFlagReturnsCmd(t *testing.T) {
+	t.Setenv("EDITOR", "some-editor --flag")
+	m := newModel(fixtures(), nil, nil)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
+	if cmd == nil {
+		t.Fatal("command should run with $EDITOR containing flags")
+	}
+	if updated.(model).status != "" {
+		t.Fatalf("expected no status message, got: %q", updated.(model).status)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -193,7 +194,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "$EDITOR is not set"
 				return m, nil
 			}
-			cmd := exec.Command(editor, h.Source)
+			parts := strings.Fields(editor)
+			cmd := exec.Command(parts[0], append(parts[1:], h.Source)...)
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 				return editorDoneMsg{err: err}
