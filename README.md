@@ -4,9 +4,11 @@ A simple TUI for selecting an SSH host from your `~/.ssh/config` and connecting 
 
 ## Features
 
--   Parses your `~/.ssh/config` file, including `Include` directives.
--   Provides a fuzzy-findable list of hosts.
--   Connects to the selected host using your system's `ssh` command.
+-   Parses your `~/.ssh/config` file, including `Include` directives — hosts from all config files appear, grouped by the file they live in.
+-   Two-pane TUI: fuzzy-filtered host list with a RECENT section, plus a detail panel (user, hostname, port, identity file, agent status, source file, last connected).
+-   Connects with plain `ssh <host>` — OpenSSH resolves users, ports, keys, and ProxyJump itself, and hopper mirrors ssh's exit code.
+-   `ctrl+a` loads the highlighted host's key into your ssh-agent (`ssh-add`, passphrase prompted by ssh-add itself).
+-   `ctrl+e` opens the host's config file in `$EDITOR` and reloads the list afterwards.
 -   Cross-platform (macOS, Linux, Windows).
 
 ## Installation
@@ -19,15 +21,22 @@ go install github.com/kejrak/hopper@latest
 
 ## Usage
 
-Simply run `hopper` in your terminal:
+Run `hopper` in your terminal:
 
 ```sh
 hopper
 ```
 
-This will open a fuzzy finder with a list of your SSH hosts. Start typing to filter the list.
-Select a host and press Enter to connect.
-Press `Ctrl+C` or `Esc` to exit without connecting.
+Type to fuzzy-filter, `↑`/`↓` to move, then:
+
+| Key | Action |
+|---|---|
+| `enter` | Connect to the highlighted host |
+| `ctrl+a` | Add the host's key to the ssh-agent |
+| `ctrl+e` | Edit the host's config file in `$EDITOR` |
+| `esc` / `ctrl+c` | Quit |
+
+Connection history is stored in a small local state file (`~/.local/state/hopper/history.json` on Linux, platform equivalent elsewhere) to power the RECENT section — delete it any time.
 
 ## Configuration
 
