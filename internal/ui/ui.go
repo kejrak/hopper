@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -13,6 +15,11 @@ import (
 type keyAddedMsg struct {
 	hostName string
 	err      error
+}
+
+// editorDoneMsg reports that $EDITOR exited; the config is re-read either way.
+type editorDoneMsg struct {
+	err error
 }
 
 // Action is what the user chose to do when the TUI exited.
@@ -118,6 +125,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.agent = host.AgentStatuses(m.hosts)
 		return m, nil
+	case editorDoneMsg:
+		if msg.err != nil {
+			m.status = "editor: " + msg.err.Error()
+		}
+		if m.reload != nil {
+			hosts, warnings, err := m.reload()
+			switch {
+			case err != nil:
+				m.status = "reload failed: " + err.Error()
+			case len(warnings) > 0:
+				m.status = warnings[0]
+				m.hosts = hosts
+			default:
+				m.hosts = hosts
+			}
+			m.agent = host.AgentStatuses(m.hosts)
+			m.refilter()
+		}
+		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
@@ -156,6 +182,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Release the terminal so ssh-add's passphrase prompt reaches the tty.
 			return m, tea.ExecProcess(host.AddKeyCommand(h.IdentityFile), func(err error) tea.Msg {
 				return keyAddedMsg{hostName: name, err: err}
+			})
+		case "ctrl+e":
+			h := m.selected()
+			if h == nil {
+				return m, nil
+			}
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				m.status = "$EDITOR is not set"
+				return m, nil
+			}
+			cmd := exec.Command(editor, h.Source)
+			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+				return editorDoneMsg{err: err}
 			})
 		default:
 			var cmd tea.Cmd

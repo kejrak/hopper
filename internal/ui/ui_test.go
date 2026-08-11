@@ -108,3 +108,31 @@ func TestKeyAddedRefreshesAgentStatus(t *testing.T) {
 		t.Fatal("expected a success status message")
 	}
 }
+
+func TestCtrlEWithoutEditorShowsStatus(t *testing.T) {
+	t.Setenv("EDITOR", "")
+	m := newModel(fixtures(), nil, nil)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
+	if cmd != nil {
+		t.Fatal("no command should run with $EDITOR unset")
+	}
+	if updated.(model).status == "" {
+		t.Fatal("expected a status message")
+	}
+}
+
+func TestEditorDoneTriggersReload(t *testing.T) {
+	reloaded := false
+	reload := func() ([]host.Host, []string, error) {
+		reloaded = true
+		return []host.Host{{Name: "fresh", Group: "default"}}, nil, nil
+	}
+	m := newModel(fixtures(), nil, reload)
+	updated, _ := m.Update(editorDoneMsg{})
+	if !reloaded {
+		t.Fatal("reload not called")
+	}
+	if h := updated.(model).selected(); h == nil || h.Name != "fresh" {
+		t.Fatalf("host list not refreshed: %+v", h)
+	}
+}
