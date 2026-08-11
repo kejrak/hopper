@@ -189,12 +189,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if h == nil {
 				return m, nil
 			}
-			editor := os.Getenv("EDITOR")
-			if editor == "" {
+			parts := strings.Fields(os.Getenv("EDITOR"))
+			if len(parts) == 0 {
 				m.status = "$EDITOR is not set"
 				return m, nil
 			}
-			parts := strings.Fields(editor)
 			cmd := exec.Command(parts[0], append(parts[1:], h.Source)...)
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
