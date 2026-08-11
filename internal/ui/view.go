@@ -76,6 +76,23 @@ func detailLines(h *host.Host, st host.KeyStatus, now time.Time) []string {
 	}
 }
 
+// truncate shortens s to at most max runes, appending "…" when it had to
+// cut anything. Operates on runes so multi-byte characters are never split.
+// max <= 1 collapses to "" or "…" respectively.
+func truncate(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max == 1 {
+		return "…"
+	}
+	return string(r[:max-1]) + "…"
+}
+
 // helpLine is the footer; Task 11/12 extend the keybindings shown here.
 const helpLine = "enter connect · ctrl+a add key · ctrl+e edit · esc quit"
 
@@ -93,7 +110,16 @@ func (m model) View() string {
 		}
 		left.WriteString(line + "\n")
 	}
-	right := strings.Join(detailLines(m.selected(), m.agent[m.selectedName()], time.Now()), "\n")
+	lines := detailLines(m.selected(), m.agent[m.selectedName()], time.Now())
+	if m.width > 0 {
+		// Border (1 col) + PaddingLeft(1) eat into the space left after the
+		// left pane; truncate each line to what's actually left.
+		max := m.width - leftWidth(m.width) - 2
+		for i, line := range lines {
+			lines[i] = truncate(line, max)
+		}
+	}
+	right := strings.Join(lines, "\n")
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
 		lipgloss.NewStyle().Width(leftWidth(m.width)).Render(left.String()),

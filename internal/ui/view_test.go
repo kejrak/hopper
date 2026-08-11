@@ -41,6 +41,30 @@ func TestStatusLabel(t *testing.T) {
 	}
 }
 
+func TestTruncate(t *testing.T) {
+	cases := []struct {
+		name string
+		s    string
+		max  int
+		want string
+	}{
+		{"shorter than max unchanged", "short", 10, "short"},
+		{"exact max unchanged", "exact", 5, "exact"},
+		{"longer truncated with ellipsis", "this is too long", 8, "this is…"},
+		{"max of zero", "anything", 0, ""},
+		{"max of one", "anything", 1, "…"},
+		{"negative max", "anything", -1, ""},
+		{"multi-byte runes not split", "日本語のテキスト", 4, "日本語…"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := truncate(c.s, c.max); got != c.want {
+				t.Errorf("truncate(%q, %d) = %q, want %q", c.s, c.max, got, c.want)
+			}
+		})
+	}
+}
+
 func TestDetailLines(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	h := &host.Host{Name: "web-prod", User: "deploy", Hostname: "10.0.1.20",
