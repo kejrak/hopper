@@ -2,6 +2,7 @@ package ui
 
 import (
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -134,6 +135,36 @@ func TestEditorDoneTriggersReload(t *testing.T) {
 	}
 	if h := updated.(model).selected(); h == nil || h.Name != "fresh" {
 		t.Fatalf("host list not refreshed: %+v", h)
+	}
+}
+
+func TestEditorDoneReloadKeepsLastConnected(t *testing.T) {
+	// Mimics main's loadHosts closure, which stamps LastConnected from
+	// history on every call (including reloads triggered by ctrl+e).
+	stamped := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	reload := func() ([]host.Host, []string, error) {
+		return []host.Host{{Name: "fresh", Group: "default", LastConnected: stamped}}, nil, nil
+	}
+	m := newModel(fixtures(), nil, reload)
+	updated, _ := m.Update(editorDoneMsg{})
+	h := updated.(model).selected()
+	if h == nil || h.Name != "fresh" {
+		t.Fatalf("host list not refreshed: %+v", h)
+	}
+	if !h.LastConnected.Equal(stamped) {
+		t.Fatalf("LastConnected lost after reload: got %v, want %v", h.LastConnected, stamped)
+	}
+}
+
+func TestCtrlEWithWhitespaceEditorShowsStatus(t *testing.T) {
+	t.Setenv("EDITOR", " ")
+	m := newModel(fixtures(), nil, nil)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlE})
+	if cmd != nil {
+		t.Fatal("no command should run with a whitespace-only $EDITOR")
+	}
+	if updated.(model).status == "" {
+		t.Fatal("expected a status message")
 	}
 }
 

@@ -29,7 +29,17 @@ func run() int {
 	root := filepath.Join(sshDir, "config")
 
 	loadHosts := func() ([]host.Host, []string, error) {
-		return sshcfg.Hosts(root, sshDir)
+		hosts, warnings, err := sshcfg.Hosts(root, sshDir)
+		if err != nil {
+			return nil, warnings, err
+		}
+		if path, pathErr := history.Path(); pathErr == nil {
+			last := history.LastConnected(history.Load(path))
+			for i := range hosts {
+				hosts[i].LastConnected = last[hosts[i].Name]
+			}
+		}
+		return hosts, warnings, nil
 	}
 	hosts, warnings, err := loadHosts()
 	if err != nil {
@@ -48,10 +58,6 @@ func run() int {
 	var entries []history.Entry
 	if histErr == nil {
 		entries = history.Load(histPath)
-	}
-	last := history.LastConnected(entries)
-	for i := range hosts {
-		hosts[i].LastConnected = last[hosts[i].Name]
 	}
 
 	result, err := ui.Run(hosts, history.Recent(entries, 5), loadHosts)
