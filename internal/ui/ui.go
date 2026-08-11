@@ -131,23 +131,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// View implements tea.Model. Task 10 replaces this with the two-pane view.
-func (m model) View() string {
-	s := m.filter.View() + "\n"
-	for i, it := range m.items {
-		if it.header != "" {
-			s += it.header + "\n"
-			continue
-		}
-		marker := "  "
-		if i == m.cursor {
-			marker = "▸ "
-		}
-		s += marker + it.h.Display() + "\n"
-	}
-	return s
-}
-
 // Run shows the picker and blocks until the user connects or quits.
 func Run(hosts []host.Host, recent []string, reload ReloadFunc) (Result, error) {
 	program := tea.NewProgram(newModel(hosts, recent, reload), tea.WithAltScreen())
