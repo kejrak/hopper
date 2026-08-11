@@ -89,7 +89,7 @@ func TestHostsUnreadableRootIsError(t *testing.T) {
 	if err := os.Chmod(root, 0o000); err != nil {
 		t.Fatalf("failed to chmod root: %v", err)
 	}
-	t.Cleanup(func() { os.Chmod(root, 0o644) })
+	t.Cleanup(func() { _ = os.Chmod(root, 0o644) })
 	if _, _, err := Hosts(root, dir); err == nil {
 		t.Fatal("want error for unreadable root config")
 	}

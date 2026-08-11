@@ -29,7 +29,7 @@ func ConfigFiles(root, sshDir string) (files []string, warnings []string) {
 		if err != nil {
 			return
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		files = append(files, path)
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {

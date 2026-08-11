@@ -25,7 +25,7 @@ func Hosts(root, sshDir string) ([]host.Host, []string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading ssh config: %w", err)
 	}
-	f.Close()
+	_ = f.Close()
 	files, warnings := ConfigFiles(root, sshDir)
 
 	type sourcedConfig struct {
@@ -41,7 +41,7 @@ func Hosts(root, sshDir string) ([]host.Host, []string, error) {
 			continue
 		}
 		cfg, err := ssh_config.Decode(f)
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("skipping %s: %v", path, err))
 			continue
