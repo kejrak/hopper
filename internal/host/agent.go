@@ -38,16 +38,23 @@ func ExpandPath(p string) string {
 func AgentStatuses(hosts []Host) map[string]KeyStatus {
 	statuses := make(map[string]KeyStatus, len(hosts))
 	list, agentOK := agentKeyList()
+	fpCache := make(map[string]string) // memoize fingerprints by IdentityFile
 	for _, h := range hosts {
 		switch {
 		case h.IdentityFile == "":
 			statuses[h.Name] = KeyStatusUnknown
 		case !agentOK:
 			statuses[h.Name] = KeyStatusNoAgent
-		case keyListed(list, fingerprint(h.IdentityFile), ExpandPath(h.IdentityFile)):
-			statuses[h.Name] = KeyStatusLoaded
 		default:
-			statuses[h.Name] = KeyStatusNotLoaded
+			// Get or compute fingerprint
+			if _, cached := fpCache[h.IdentityFile]; !cached {
+				fpCache[h.IdentityFile] = fingerprint(h.IdentityFile)
+			}
+			if keyListed(list, fpCache[h.IdentityFile], ExpandPath(h.IdentityFile)) {
+				statuses[h.Name] = KeyStatusLoaded
+			} else {
+				statuses[h.Name] = KeyStatusNotLoaded
+			}
 		}
 	}
 	return statuses
@@ -90,8 +97,13 @@ func keyListed(list, fp, path string) bool {
 		if fp != "" && strings.Contains(line, fp) {
 			return true
 		}
-		if fp == "" && path != "" && strings.Contains(line, path) {
-			return true
+		if fp == "" && path != "" {
+			// Match path as a whole whitespace-delimited token
+			for _, field := range strings.Fields(line) {
+				if field == path {
+					return true
+				}
+			}
 		}
 	}
 	return false

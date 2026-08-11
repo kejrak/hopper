@@ -29,6 +29,20 @@ func TestKeyListedFallsBackToPathWhenNoFingerprint(t *testing.T) {
 	}
 }
 
+func TestKeyListedPathMatchWholeToken(t *testing.T) {
+	// Ensure exact path match, not substring/prefix match
+	agentWithProd := `256 SHA256:ProdKey /home/u/.ssh/id_ed25519_prod (ED25519)
+`
+	// Shorter path should not match when longer path is in list
+	if keyListed(agentWithProd, "", "/home/u/.ssh/id_ed25519") {
+		t.Fatal("short path matched substring of longer path in agent")
+	}
+	// Exact path should match
+	if !keyListed(agentWithProd, "", "/home/u/.ssh/id_ed25519_prod") {
+		t.Fatal("exact path not matched")
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
