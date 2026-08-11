@@ -63,19 +63,42 @@ func Load(path string) []Entry {
 }
 
 // Record prepends an entry and rewrites the file, capped at maxEntries.
+// The write is atomic: it's staged in a temp file in the same directory
+// (so the rename is same-filesystem) and renamed over the target, so a
+// crash or concurrent read never observes a partially written file.
 func Record(path, hostName string, now time.Time) error {
 	entries := append([]Entry{{Host: hostName, Timestamp: now}}, Load(path)...)
 	if len(entries) > maxEntries {
 		entries = entries[:maxEntries]
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(stateFile{Version: 1, Entries: entries}, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+
+	tmp, err := os.CreateTemp(dir, "history-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once the rename below succeeds
+
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // Recent returns up to n distinct host names, newest first. Assumes entries
