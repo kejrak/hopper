@@ -96,10 +96,43 @@ func truncate(s string, max int) string {
 // helpLine is the footer; Task 11/12 extend the keybindings shown here.
 const helpLine = "enter connect · ctrl+a add key · ctrl+e edit · esc quit"
 
+// windowBounds picks the slice [start, end) of a `total`-row list to show
+// in `visible` rows such that `cursor` always falls inside it. It scrolls
+// minimally, keeping the cursor centered when the list is longer than the
+// window and clamping at the list's edges. When visible >= total (including
+// visible <= 0, e.g. before a WindowSizeMsg arrives) it returns the whole
+// list untouched.
+func windowBounds(cursor, total, visible int) (start, end int) {
+	if total <= 0 {
+		return 0, 0
+	}
+	if visible <= 0 || visible >= total {
+		return 0, total
+	}
+	start = cursor - visible/2
+	if start < 0 {
+		start = 0
+	}
+	if maxStart := total - visible; start > maxStart {
+		start = maxStart
+	}
+	return start, start + visible
+}
+
 // View implements tea.Model: filter on top, sectioned list left, details right.
 func (m model) View() string {
+	footer := dimStyle.Render(helpLine)
+	if m.status != "" {
+		footer = m.status + "\n" + footer
+	}
+	// Chrome consumed by the filter line and the footer (help line, plus a
+	// status line when present) — whatever's left goes to the list.
+	chrome := 1 + strings.Count(footer, "\n") + 1
+	start, end := windowBounds(m.cursor, len(m.items), m.height-chrome)
+
 	var left strings.Builder
-	for i, it := range m.items {
+	for i := start; i < end; i++ {
+		it := m.items[i]
 		if it.header != "" {
 			left.WriteString(headerStyle.Render(it.header) + "\n")
 			continue
@@ -125,10 +158,6 @@ func (m model) View() string {
 		lipgloss.NewStyle().Width(leftWidth(m.width)).Render(left.String()),
 		borderStyle.Render(right),
 	)
-	footer := dimStyle.Render(helpLine)
-	if m.status != "" {
-		footer = m.status + "\n" + footer
-	}
 	return m.filter.View() + "\n" + body + "\n" + footer
 }
 
