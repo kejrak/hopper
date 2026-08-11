@@ -8,11 +8,18 @@ import (
 
 func TestCommandPassesOnlyTheAlias(t *testing.T) {
 	cmd := Command("web-prod")
-	if len(cmd.Args) != 2 || cmd.Args[0] != "ssh" || cmd.Args[1] != "web-prod" {
-		t.Fatalf("got args %v, want [ssh web-prod]", cmd.Args)
+	if len(cmd.Args) != 3 || cmd.Args[0] != "ssh" || cmd.Args[1] != "--" || cmd.Args[2] != "web-prod" {
+		t.Fatalf("got args %v, want [ssh -- web-prod]", cmd.Args)
 	}
 	if cmd.Stdin == nil || cmd.Stdout == nil || cmd.Stderr == nil {
 		t.Fatal("stdio must be inherited")
+	}
+}
+
+func TestCommandHardensAgainstDashPrefixedName(t *testing.T) {
+	cmd := Command("-oProxyCommand=evil")
+	if len(cmd.Args) != 3 || cmd.Args[1] != "--" {
+		t.Fatalf("got args %v, want the -- marker before the name", cmd.Args)
 	}
 }
 

@@ -111,9 +111,11 @@ func keyListed(list, fp, path string) bool {
 
 // AddKeyCommand returns the interactive ssh-add invocation. The caller must
 // run it with the terminal released so the passphrase prompt reaches the
-// tty — hopper never handles the passphrase itself.
+// tty — hopper never handles the passphrase itself. The "--" end-of-options
+// marker guards against a config-derived identity path that starts with
+// "-" being parsed as an ssh-add option.
 func AddKeyCommand(identityFile string) *exec.Cmd {
-	cmd := exec.Command("ssh-add", ExpandPath(identityFile))
+	cmd := exec.Command("ssh-add", "--", ExpandPath(identityFile))
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

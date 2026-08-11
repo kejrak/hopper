@@ -8,9 +8,11 @@ import (
 
 // Command builds the connection command. Only the host alias is passed:
 // OpenSSH resolves User/Port/IdentityFile/ProxyJump itself from its own
-// configuration, so hopper can never contradict it.
+// configuration, so hopper can never contradict it. The "--" end-of-options
+// marker guards against a config-derived alias that starts with "-" being
+// parsed as an ssh option.
 func Command(name string) *exec.Cmd {
-	cmd := exec.Command("ssh", name)
+	cmd := exec.Command("ssh", "--", name)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
