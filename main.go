@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,8 +44,12 @@ func run() int {
 		return hosts[i].Display()
 	})
 	if err != nil {
-		// User cancelled the picker (esc / ctrl+c).
-		return 0
+		if errors.Is(err, fuzzyfinder.ErrAbort) {
+			// User cancelled the picker (esc / ctrl+c).
+			return 0
+		}
+		fmt.Fprintln(os.Stderr, "hopper:", err)
+		return 1
 	}
 	return host.ExitCode(host.Command(hosts[idx].Name).Run())
 }
