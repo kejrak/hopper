@@ -1,6 +1,7 @@
 package sshcfg
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -77,4 +78,46 @@ func TestHostsUnparsableIncludeWarnsAndContinues(t *testing.T) {
 		}
 	}
 	t.Fatalf("host from root missing after bad include: %+v", hosts)
+}
+
+func TestHostsUnreadableRootIsError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, cannot test permission denial")
+	}
+	dir := t.TempDir()
+	root := write(t, dir, "config", "Host h\n")
+	if err := os.Chmod(root, 0o000); err != nil {
+		t.Fatalf("failed to chmod root: %v", err)
+	}
+	t.Cleanup(func() { os.Chmod(root, 0o644) })
+	if _, _, err := Hosts(root, dir); err == nil {
+		t.Fatal("want error for unreadable root config")
+	}
+}
+
+func TestHostsMixedConcreteWildcardDoesNotLeak(t *testing.T) {
+	dir := t.TempDir()
+	root := write(t, dir, "config",
+		"Host bastion *.corp\n  User jump\n  Port 2222\nHost db.corp\n")
+	hosts, _, err := Hosts(root, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hosts) != 2 {
+		t.Fatalf("got %d hosts, want 2: %+v", len(hosts), hosts)
+	}
+	bastion, db := hosts[0], hosts[1]
+	if bastion.Name != "bastion" {
+		t.Errorf("first host should be bastion, got %s", bastion.Name)
+	}
+	if db.Name != "db.corp" {
+		t.Errorf("second host should be db.corp, got %s", db.Name)
+	}
+	// db.corp must NOT inherit User from the wildcard *.corp pattern in the bastion block.
+	if db.User != "" {
+		t.Errorf("db.corp must not inherit User from *.corp wildcard, got User=%q", db.User)
+	}
+	if db.Port != "22" {
+		t.Errorf("db.corp must have default Port, got %q", db.Port)
+	}
 }

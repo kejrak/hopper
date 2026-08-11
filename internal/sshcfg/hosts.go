@@ -14,13 +14,18 @@ import (
 // Hosts parses root and every included file and returns each concrete host
 // exactly once, in definition order (first definition wins, the OpenSSH
 // rule). Wildcard patterns (*, ?, !) are skipped. Attribute values come
-// from the merged configuration and are informational only. warnings lists
-// included files that were skipped; the returned error is non-nil only when
-// the root config itself is unreadable.
+// from the merged configuration and are informational only; wildcard-derived
+// defaults (e.g., from "Host *") are intentionally excluded from displayed
+// attributes to prevent silent inheritance. warnings lists included files
+// that were skipped; the returned error is non-nil only when the root config
+// itself is unreadable.
 func Hosts(root, sshDir string) ([]host.Host, []string, error) {
-	if _, err := os.Stat(root); err != nil {
+	// Verify root is readable by attempting to open it.
+	f, err := os.Open(root)
+	if err != nil {
 		return nil, nil, fmt.Errorf("reading ssh config: %w", err)
 	}
+	f.Close()
 	files, warnings := ConfigFiles(root, sshDir)
 
 	type sourcedConfig struct {
@@ -42,17 +47,20 @@ func Hosts(root, sshDir string) ([]host.Host, []string, error) {
 			continue
 		}
 		configs = append(configs, sourcedConfig{cfg: cfg, path: path})
-		// Only add blocks with concrete patterns to merged config
+		// Add blocks to merged config, but strip wildcard patterns to prevent
+		// wildcard-derived attributes from leaking to unrelated concrete hosts.
 		for _, block := range cfg.Hosts {
-			hasConcretePattern := false
+			var concretePatterns []*ssh_config.Pattern
 			for _, pattern := range block.Patterns {
-				if !strings.ContainsAny(pattern.String(), "*?!") {
-					hasConcretePattern = true
-					break
+				if !isWildcardPattern(pattern.String()) {
+					concretePatterns = append(concretePatterns, pattern)
 				}
 			}
-			if hasConcretePattern {
-				merged.Hosts = append(merged.Hosts, block)
+			if len(concretePatterns) > 0 {
+				// Create a copy of the block with only concrete patterns.
+				concreteBlock := *block
+				concreteBlock.Patterns = concretePatterns
+				merged.Hosts = append(merged.Hosts, &concreteBlock)
 			}
 		}
 	}
@@ -63,7 +71,7 @@ func Hosts(root, sshDir string) ([]host.Host, []string, error) {
 		for _, block := range sc.cfg.Hosts {
 			for _, pattern := range block.Patterns {
 				name := pattern.String()
-				if strings.ContainsAny(name, "*?!") || seen[name] {
+				if isWildcardPattern(name) || seen[name] {
 					continue
 				}
 				seen[name] = true
@@ -108,4 +116,10 @@ func group(path, root string) string {
 	}
 	base := filepath.Base(path)
 	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
+// isWildcardPattern returns true if the pattern string contains wildcard
+// characters (*, ?, or !), which indicates it is not a concrete host name.
+func isWildcardPattern(pattern string) bool {
+	return strings.ContainsAny(pattern, "*?!")
 }
