@@ -9,6 +9,12 @@ import (
 	"github.com/kejrak/hopper/internal/host"
 )
 
+// keyAddedMsg reports the outcome of an interactive ssh-add run.
+type keyAddedMsg struct {
+	hostName string
+	err      error
+}
+
 // Action is what the user chose to do when the TUI exited.
 type Action int
 
@@ -104,6 +110,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
+	case keyAddedMsg:
+		if msg.err != nil {
+			m.status = "ssh-add failed: " + msg.err.Error()
+		} else {
+			m.status = "key loaded for " + msg.hostName
+		}
+		m.agent = host.AgentStatuses(m.hosts)
+		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
@@ -121,6 +135,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down":
 			m.moveCursor(1)
 			return m, nil
+		case "ctrl+a":
+			h := m.selected()
+			if h == nil {
+				return m, nil
+			}
+			if h.IdentityFile == "" {
+				m.status = "no identity file configured for " + h.Name
+				return m, nil
+			}
+			switch m.agent[h.Name] {
+			case host.KeyStatusLoaded:
+				m.status = "key already loaded for " + h.Name
+				return m, nil
+			case host.KeyStatusNoAgent:
+				m.status = "no ssh-agent available (SSH_AUTH_SOCK)"
+				return m, nil
+			}
+			name := h.Name
+			// Release the terminal so ssh-add's passphrase prompt reaches the tty.
+			return m, tea.ExecProcess(host.AddKeyCommand(h.IdentityFile), func(err error) tea.Msg {
+				return keyAddedMsg{hostName: name, err: err}
+			})
 		default:
 			var cmd tea.Cmd
 			m.filter, cmd = m.filter.Update(msg)

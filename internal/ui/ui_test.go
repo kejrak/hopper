@@ -74,3 +74,37 @@ func TestCursorSkipsHeaders(t *testing.T) {
 		t.Fatal("cursor moved onto a header row")
 	}
 }
+
+func TestCtrlAWithoutIdentityShowsStatus(t *testing.T) {
+	hosts := []host.Host{{Name: "bare", Group: "default"}}
+	m := newModel(hosts, nil, nil)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+	if cmd != nil {
+		t.Fatal("no command should run without an identity file")
+	}
+	if got := updated.(model).status; got == "" {
+		t.Fatal("expected a status message")
+	}
+}
+
+func TestCtrlAAlreadyLoadedShowsStatusWithoutPrompt(t *testing.T) {
+	hosts := []host.Host{{Name: "web", Group: "default", IdentityFile: "~/.ssh/id"}}
+	m := newModel(hosts, nil, nil)
+	m.agent["web"] = host.KeyStatusLoaded
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+	if cmd != nil {
+		t.Fatal("no command should run when the key is already loaded")
+	}
+	if got := updated.(model).status; got == "" {
+		t.Fatal("expected a status message")
+	}
+}
+
+func TestKeyAddedRefreshesAgentStatus(t *testing.T) {
+	hosts := []host.Host{{Name: "web", Group: "default", IdentityFile: "~/.ssh/id"}}
+	m := newModel(hosts, nil, nil)
+	updated, _ := m.Update(keyAddedMsg{hostName: "web", err: nil})
+	if got := updated.(model).status; got == "" {
+		t.Fatal("expected a success status message")
+	}
+}
