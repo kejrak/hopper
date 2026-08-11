@@ -90,6 +90,21 @@ func TestRecentWithNegativeReturnsNil(t *testing.T) {
 	}
 }
 
+func TestRecordLeavesNoTempFilesBehind(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.json")
+	if err := Record(path, "web-prod", ts("2026-08-10T10:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "history-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temp files left behind: %v", matches)
+	}
+}
+
 func TestLastConnected(t *testing.T) {
 	entries := []Entry{
 		{Host: "a", Timestamp: ts("2026-08-10T10:00:00Z")},

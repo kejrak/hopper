@@ -58,10 +58,10 @@ func TestExpandPath(t *testing.T) {
 
 func TestAddKeyCommand(t *testing.T) {
 	cmd := AddKeyCommand("~/.ssh/id_work")
-	if cmd.Args[0] != "ssh-add" || len(cmd.Args) != 2 {
-		t.Fatalf("got %v", cmd.Args)
+	if cmd.Args[0] != "ssh-add" || len(cmd.Args) != 3 || cmd.Args[1] != "--" {
+		t.Fatalf("got %v, want [ssh-add -- <expanded path>]", cmd.Args)
 	}
-	if strings.HasPrefix(cmd.Args[1], "~") {
+	if strings.HasPrefix(cmd.Args[2], "~") {
 		t.Fatalf("path not expanded: %v", cmd.Args)
 	}
 }
