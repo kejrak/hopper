@@ -1,6 +1,6 @@
 # Hopper
 
-A simple TUI for selecting an SSH host from your `~/.ssh/config` and connecting to it. It uses a fuzzy finder to make it easy to find the host you're looking for.
+A simple TUI for selecting an SSH host from your `~/.ssh/config` and connecting to it. Its built-in fuzzy-filtered list makes it easy to find the host you're looking for.
 
 ## Features
 
@@ -51,15 +51,15 @@ To build from source, you'll need Go installed.
 ```sh
 git clone https://github.com/kejrak/hopper.git
 cd hopper
-go build
-./hopper
+go build -o bin/hopper .
+./bin/hopper
 ```
 
-You can also use the included `makefile`:
+You can also use the included `makefile`, which builds the same binary to `bin/hopper`:
 
 ```sh
 git clone https://github.com/kejrak/hopper.git
 cd hopper
-make
-./hopper
+make build
+./bin/hopper
 ```
