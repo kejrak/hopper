@@ -33,6 +33,11 @@ Usage:
                                   (ssh -o BatchMode=yes -T); exits with the
                                   remote command's code, 255 on ssh errors
   hopper help                     show this help
+
+Environment:
+  HOPPER_ALLOW_GROUPS             comma-separated groups (ssh config file
+                                  names; "default" is ~/.ssh/config) that
+                                  list, show and exec may use; unset = all
 `
 
 // isTerminal reports whether stdin and stdout are both terminals, which
@@ -43,6 +48,24 @@ var isTerminal = func() bool {
 
 func isTTY(fd uintptr) bool {
 	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
+// allowGroupsEnv names the environment variable holding the group
+// allowlist for the non-interactive commands.
+const allowGroupsEnv = "HOPPER_ALLOW_GROUPS"
+
+// allowedGroups returns the group allowlist; nil allows every group.
+func allowedGroups() map[string]bool {
+	return cli.AllowedGroups(os.Getenv(allowGroupsEnv))
+}
+
+// resolveErrorMessage formats a cli.Resolve error, naming the allowlist
+// when a group restriction (not a typo) refused the host.
+func resolveErrorMessage(err error) string {
+	if errors.Is(err, cli.ErrGroupNotAllowed) {
+		return fmt.Sprintf("%v; %s=%q", err, allowGroupsEnv, os.Getenv(allowGroupsEnv))
+	}
+	return err.Error()
 }
 
 func main() {
@@ -155,7 +178,7 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
-	if err := cli.List(stdout, hosts, asJSON); err != nil {
+	if err := cli.List(stdout, cli.FilterGroups(hosts, allowedGroups()), asJSON); err != nil {
 		_, _ = fmt.Fprintln(stderr, "hopper:", err)
 		return 1
 	}
@@ -178,7 +201,12 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
-	if err := cli.Show(stdout, hosts, positional[0], asJSON); err != nil {
+	h, err := cli.Resolve(hosts, positional[0], allowedGroups())
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "hopper:", resolveErrorMessage(err))
+		return 1
+	}
+	if err := cli.Show(stdout, h, asJSON); err != nil {
 		_, _ = fmt.Fprintln(stderr, "hopper:", err)
 		return 1
 	}
@@ -198,9 +226,9 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
-	h, err := cli.Find(hosts, name)
+	h, err := cli.Resolve(hosts, name, allowedGroups())
 	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "hopper:", err)
+		_, _ = fmt.Fprintln(stderr, "hopper:", resolveErrorMessage(err))
 		return 1
 	}
 	recordHistory(h.Name, stderr)

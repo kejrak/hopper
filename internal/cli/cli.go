@@ -20,6 +20,10 @@ var ErrUnknownHost = errors.New("unknown host")
 // ErrUsage marks a malformed command line; callers exit with code 2.
 var ErrUsage = errors.New("usage")
 
+// ErrGroupNotAllowed is returned when a host exists but its group is not
+// in the allowlist.
+var ErrGroupNotAllowed = errors.New("group not allowed")
+
 // hostJSON is the stable machine-readable shape of a host.
 type hostJSON struct {
 	Name          string     `json:"name"`
@@ -78,12 +82,8 @@ func List(w io.Writer, hosts []host.Host, asJSON bool) error {
 }
 
 // Show writes one host's details as aligned "key: value" lines, or with
-// asJSON a single JSON object. Nothing is written for an unknown host.
-func Show(w io.Writer, hosts []host.Host, name string, asJSON bool) error {
-	h, err := Find(hosts, name)
-	if err != nil {
-		return err
-	}
+// asJSON a single JSON object.
+func Show(w io.Writer, h host.Host, asJSON bool) error {
 	if asJSON {
 		return writeJSON(w, toJSON(h))
 	}
@@ -105,8 +105,55 @@ func Show(w io.Writer, hosts []host.Host, name string, asJSON bool) error {
 	for _, f := range fields {
 		_, _ = fmt.Fprintf(&b, "%-16s%s\n", f[0]+":", f[1])
 	}
-	_, err = io.WriteString(w, b.String())
+	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+// AllowedGroups parses a comma-separated group allowlist such as
+// "bizznote, chutno". It returns nil, meaning every group is allowed,
+// when spec names no group. Matching is exact and case-sensitive.
+func AllowedGroups(spec string) map[string]bool {
+	var allowed map[string]bool
+	for _, group := range strings.Split(spec, ",") {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		if allowed == nil {
+			allowed = make(map[string]bool)
+		}
+		allowed[group] = true
+	}
+	return allowed
+}
+
+// FilterGroups returns the hosts whose group is allowed, in their original
+// order. A nil allowlist allows every host.
+func FilterGroups(hosts []host.Host, allowed map[string]bool) []host.Host {
+	if allowed == nil {
+		return hosts
+	}
+	out := make([]host.Host, 0, len(hosts))
+	for _, h := range hosts {
+		if allowed[h.Group] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// Resolve finds the named host and checks it against the allowlist. The
+// error wraps ErrUnknownHost or ErrGroupNotAllowed; the latter names the
+// host's group so a caller can tell a typo from a restriction.
+func Resolve(hosts []host.Host, name string, allowed map[string]bool) (host.Host, error) {
+	h, err := Find(hosts, name)
+	if err != nil {
+		return host.Host{}, err
+	}
+	if allowed != nil && !allowed[h.Group] {
+		return host.Host{}, fmt.Errorf("%w: host %q is in group %q", ErrGroupNotAllowed, h.Name, h.Group)
+	}
+	return h, nil
 }
 
 func writeJSON(w io.Writer, v any) error {

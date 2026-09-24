@@ -66,7 +66,7 @@ func TestListJSONEmptyIsArray(t *testing.T) {
 
 func TestShowText(t *testing.T) {
 	var b bytes.Buffer
-	if err := Show(&b, testHosts, "db", false); err != nil {
+	if err := Show(&b, testHosts[1], false); err != nil {
 		t.Fatal(err)
 	}
 	out := b.String()
@@ -79,7 +79,7 @@ func TestShowText(t *testing.T) {
 
 func TestShowJSON(t *testing.T) {
 	var b bytes.Buffer
-	if err := Show(&b, testHosts, "web", true); err != nil {
+	if err := Show(&b, testHosts[0], true); err != nil {
 		t.Fatal(err)
 	}
 	var got map[string]any
@@ -88,17 +88,6 @@ func TestShowJSON(t *testing.T) {
 	}
 	if got["name"] != "web" || got["user"] != "deploy" {
 		t.Fatalf("unexpected host %v", got)
-	}
-}
-
-func TestShowUnknownHost(t *testing.T) {
-	var b bytes.Buffer
-	err := Show(&b, testHosts, "nope", false)
-	if !errors.Is(err, ErrUnknownHost) {
-		t.Fatalf("got %v, want ErrUnknownHost", err)
-	}
-	if b.Len() != 0 {
-		t.Fatalf("wrote %q on error", b.String())
 	}
 }
 
@@ -146,5 +135,50 @@ func TestParseExec(t *testing.T) {
 		if _, _, err := ParseExec(bad); !errors.Is(err, ErrUsage) {
 			t.Errorf("ParseExec(%v): got %v, want ErrUsage", bad, err)
 		}
+	}
+}
+
+func TestAllowedGroups(t *testing.T) {
+	if got := AllowedGroups(""); got != nil {
+		t.Fatalf("empty spec: got %v, want nil", got)
+	}
+	if got := AllowedGroups(" , ,"); got != nil {
+		t.Fatalf("only separators: got %v, want nil", got)
+	}
+	got := AllowedGroups(" work , default,,")
+	if len(got) != 2 || !got["work"] || !got["default"] {
+		t.Fatalf("got %v, want work+default", got)
+	}
+	if AllowedGroups("Work")["work"] {
+		t.Fatal("group match must be case-sensitive")
+	}
+}
+
+func TestFilterGroups(t *testing.T) {
+	if got := FilterGroups(testHosts, nil); len(got) != 2 {
+		t.Fatalf("nil allowlist: got %d hosts, want 2", len(got))
+	}
+	got := FilterGroups(testHosts, map[string]bool{"work": true})
+	if len(got) != 1 || got[0].Name != "db" {
+		t.Fatalf("got %v, want only db", got)
+	}
+	if got := FilterGroups(testHosts, map[string]bool{"nope": true}); len(got) != 0 {
+		t.Fatalf("no match: got %v, want none", got)
+	}
+}
+
+func TestResolve(t *testing.T) {
+	if h, err := Resolve(testHosts, "web", nil); err != nil || h.Name != "web" {
+		t.Fatalf("nil allowlist: got %v, %v", h, err)
+	}
+	if h, err := Resolve(testHosts, "db", map[string]bool{"work": true}); err != nil || h.Name != "db" {
+		t.Fatalf("allowed: got %v, %v", h, err)
+	}
+	_, err := Resolve(testHosts, "web", map[string]bool{"work": true})
+	if !errors.Is(err, ErrGroupNotAllowed) || !strings.Contains(err.Error(), `"web"`) || !strings.Contains(err.Error(), `"config"`) {
+		t.Fatalf("disallowed: got %v, want ErrGroupNotAllowed naming host and group", err)
+	}
+	if _, err := Resolve(testHosts, "nope", map[string]bool{"work": true}); !errors.Is(err, ErrUnknownHost) {
+		t.Fatalf("unknown: got %v, want ErrUnknownHost", err)
 	}
 }

@@ -58,6 +58,25 @@ To let an agent use hopper, add a line like this to your `CLAUDE.md` / `AGENTS.m
 
 > SSH hosts: run `hopper list --json` to discover hosts and `hopper exec <host> -- <cmd>` to run commands on them.
 
+### Limiting an agent to some host groups
+
+A host's group is the name of the ssh config file it is defined in (`~/.ssh/config.d/bizznote` → `bizznote`; hosts in `~/.ssh/config` itself are `default`). Set `HOPPER_ALLOW_GROUPS` to a comma-separated list and `list`, `show` and `exec` only work with those groups: other hosts are left out of `list` and refused by `show`/`exec` (exit 1, with a message naming the host's group). The interactive TUI ignores it.
+
+Set it where the agent can't change it per call — for example in a project's `.claude/settings.json`, so an agent working in that repository only reaches that project's servers:
+
+```json
+{
+  "env": { "HOPPER_ALLOW_GROUPS": "bizznote" },
+  "permissions": {
+    "allow": ["Bash(hopper list:*)", "Bash(hopper show:*)"],
+    "ask": ["Bash(hopper exec:*)"],
+    "deny": ["Bash(ssh:*)", "Bash(scp:*)"]
+  }
+}
+```
+
+The allowlist is a guard rail, not a sandbox: an agent could still run plain `ssh` or prefix the command with its own `HOPPER_ALLOW_GROUPS=…`. The permission rules above close both gaps — raw `ssh` is denied, and a prefixed command no longer matches the allow rules, so you are asked first.
+
 ## Configuration
 
 `hopper` uses your existing `~/.ssh/config` file. No additional configuration is needed. It will pick up hosts, usernames, ports, and identity files from your SSH config.

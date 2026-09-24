@@ -24,8 +24,8 @@ Host db
 `
 
 // setupHome points HOME (and the history location) at a temp dir holding
-// an ssh config with the given contents.
-func setupHome(t *testing.T, config string) {
+// an ssh config with the given contents. It returns the temp home dir.
+func setupHome(t *testing.T, config string) string {
 	t.Helper()
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
@@ -37,6 +37,7 @@ func setupHome(t *testing.T, config string) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	return home
 }
 
 // fakeSSH puts an ssh stub first on PATH that writes its argv, one per
@@ -238,5 +239,94 @@ func TestMissingConfigIsRuntimeError(t *testing.T) {
 	code, out, errOut := runArgs("list")
 	if code != 1 || out != "" || !strings.Contains(errOut, "hopper:") {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
+// groupedConfig defines web in ~/.ssh/config (group "default") and pulls
+// db from ~/.ssh/work (group "work").
+const groupedConfig = `Include work
+
+Host web
+  HostName 10.0.0.1
+`
+
+func setupGroupedHome(t *testing.T) {
+	t.Helper()
+	home := setupHome(t, groupedConfig)
+	if err := os.WriteFile(filepath.Join(home, ".ssh", "work"), []byte("Host db\n  HostName 10.0.0.2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAllowGroupsFiltersList(t *testing.T) {
+	setupGroupedHome(t)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	code, out, errOut := runArgs("list", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	var hosts []map[string]any
+	if err := json.Unmarshal([]byte(out), &hosts); err != nil {
+		t.Fatalf("stdout is not JSON: %q: %v", out, err)
+	}
+	if len(hosts) != 1 || hosts[0]["name"] != "db" {
+		t.Fatalf("got %v, want only db", hosts)
+	}
+}
+
+func TestAllowGroupsUnsetListsAll(t *testing.T) {
+	setupGroupedHome(t)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "")
+	code, out, _ := runArgs("list")
+	if code != 0 || !strings.Contains(out, "web\t") || !strings.Contains(out, "db\t") {
+		t.Fatalf("exit %d, stdout %q", code, out)
+	}
+}
+
+func TestAllowGroupsShowDisallowed(t *testing.T) {
+	setupGroupedHome(t)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	code, out, errOut := runArgs("show", "web")
+	if code != 1 || out != "" {
+		t.Fatalf("exit %d, stdout %q", code, out)
+	}
+	for _, want := range []string{`"web"`, `group "default"`, `HOPPER_ALLOW_GROUPS="work"`} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr %q missing %s", errOut, want)
+		}
+	}
+}
+
+func TestAllowGroupsShowAllowed(t *testing.T) {
+	setupGroupedHome(t)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	code, out, errOut := runArgs("show", "db")
+	if code != 0 || !strings.Contains(out, "10.0.0.2") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
+func TestAllowGroupsExecDisallowedDoesNotRunSSH(t *testing.T) {
+	setupGroupedHome(t)
+	argsFile := fakeSSH(t, 0)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	code, _, errOut := runArgs("exec", "web", "--", "true")
+	if code != 1 || !strings.Contains(errOut, "group not allowed") {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if _, err := os.Stat(argsFile); !os.IsNotExist(err) {
+		t.Fatal("ssh must not run for a host outside the allowed groups")
+	}
+}
+
+func TestAllowGroupsExecAllowed(t *testing.T) {
+	setupGroupedHome(t)
+	argsFile := fakeSSH(t, 0)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	if code, _, errOut := runArgs("exec", "db", "--", "true"); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if _, err := os.Stat(argsFile); err != nil {
+		t.Fatalf("ssh stub was not run: %v", err)
 	}
 }
