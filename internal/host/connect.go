@@ -19,6 +19,20 @@ func Command(name string) *exec.Cmd {
 	return cmd
 }
 
+// ExecCommand builds a non-interactive remote command for scripts and AI
+// agents. BatchMode makes ssh fail fast instead of prompting for a password
+// or passphrase nobody is there to type, and -T skips PTY allocation. As
+// with Command, only the alias is passed and "--" guards it; ssh joins args
+// into one string that the remote shell interprets, exactly like plain ssh.
+func ExecCommand(name string, args []string) *exec.Cmd {
+	sshArgs := append([]string{"-o", "BatchMode=yes", "-T", "--", name}, args...)
+	cmd := exec.Command("ssh", sshArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd
+}
+
 // ExitCode maps a Run error to the code hopper should exit with: 0 on
 // success, ssh's own exit code when it exited non-zero, 1 for anything
 // else (e.g. the ssh binary is missing).

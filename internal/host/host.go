@@ -20,12 +20,17 @@ type Host struct {
 	LastConnected time.Time // zero if never connected
 }
 
-// Display returns the one-line picker label, e.g. "web-prod (deploy@10.0.1.20:22)".
+// Target returns the connection target, e.g. "deploy@10.0.1.20:22".
 // The user@ part is omitted when no User is configured.
-func (h Host) Display() string {
+func (h Host) Target() string {
 	target := h.Hostname
 	if h.User != "" {
-		target = h.User + "@" + h.Hostname
+		target = h.User + "@" + target
 	}
-	return fmt.Sprintf("%s (%s:%s)", h.Name, target, h.Port)
+	return target + ":" + h.Port
+}
+
+// Display returns the one-line picker label, e.g. "web-prod (deploy@10.0.1.20:22)".
+func (h Host) Display() string {
+	return fmt.Sprintf("%s (%s)", h.Name, h.Target())
 }
