@@ -3,6 +3,7 @@ package host
 import (
 	"errors"
 	"os/exec"
+	"slices"
 	"testing"
 )
 
@@ -34,5 +35,24 @@ func TestExitCodeMirrorsSSH(t *testing.T) {
 	}
 	if got := ExitCode(errors.New("ssh not found")); got != 1 {
 		t.Fatalf("other error: got %d, want 1", got)
+	}
+}
+
+func TestExecCommandArgs(t *testing.T) {
+	cmd := ExecCommand("web-prod", []string{"uptime"})
+	want := []string{"ssh", "-o", "BatchMode=yes", "-T", "--", "web-prod", "uptime"}
+	if !slices.Equal(cmd.Args, want) {
+		t.Fatalf("got args %v, want %v", cmd.Args, want)
+	}
+	if cmd.Stdin == nil || cmd.Stdout == nil || cmd.Stderr == nil {
+		t.Fatal("stdio must be inherited")
+	}
+}
+
+func TestExecCommandKeepsRemoteArgsAfterAlias(t *testing.T) {
+	cmd := ExecCommand("-oProxyCommand=evil", []string{"ls", "-la"})
+	want := []string{"ssh", "-o", "BatchMode=yes", "-T", "--", "-oProxyCommand=evil", "ls", "-la"}
+	if !slices.Equal(cmd.Args, want) {
+		t.Fatalf("got args %v, want %v", cmd.Args, want)
 	}
 }

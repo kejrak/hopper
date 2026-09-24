@@ -15,3 +15,17 @@ func TestDisplayWithoutUserOmitsAt(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+func TestTargetWithUser(t *testing.T) {
+	h := Host{Name: "web-prod", User: "deploy", Hostname: "10.0.1.20", Port: "22"}
+	if got, want := h.Target(), "deploy@10.0.1.20:22"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestTargetWithoutUser(t *testing.T) {
+	h := Host{Name: "nas", Hostname: "nas.local", Port: "2222"}
+	if got, want := h.Target(), "nas.local:2222"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
