@@ -50,6 +50,8 @@ hopper exec web-prod -- uptime   # run a command, no prompts
 
 `hopper exec` only accepts hosts defined in your ssh config and runs `ssh -o BatchMode=yes -T -- <host> <cmd>`, so it fails fast instead of waiting for a password or passphrase (load keys into your ssh-agent first, e.g. with `ctrl+a` in the TUI). It exits with the remote command's exit code (255 when ssh itself fails) and is recorded in RECENT like a normal connection. Errors and warnings go to stderr; stdout carries only the output.
 
+Like plain `ssh`, `hopper exec` forwards its stdin to the remote command, so `echo data | hopper exec web-prod -- tee /tmp/f` works. In shell loops, or anywhere stdin may stay open, add `< /dev/null` so ssh doesn't consume the loop's input or wait for data: `hopper exec "$h" -- uptime < /dev/null`.
+
 Exit codes: `0` success, `1` error (unknown host, unreadable config), `2` usage error, otherwise the remote/ssh exit code. Running bare `hopper` without a terminal exits `1` with a pointer to these commands.
 
 To let an agent use hopper, add a line like this to your `CLAUDE.md` / `AGENTS.md`:

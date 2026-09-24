@@ -59,13 +59,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "show":
 		return runShow(args[1:], stdout, stderr)
 	case "exec":
-		return runExec(args[1:], stderr)
+		return runExec(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		_, _ = fmt.Fprint(stdout, usage)
 		return 0
 	default:
 		return usageError(stderr, fmt.Errorf("%w: unknown command %q", cli.ErrUsage, args[0]))
 	}
+}
+
+// wantsHelp reports whether -h or --help appears anywhere in args.
+func wantsHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
 }
 
 func usageError(stderr io.Writer, err error) int {
@@ -130,6 +140,10 @@ func recordHistory(name string, stderr io.Writer) {
 }
 
 func runList(args []string, stdout, stderr io.Writer) int {
+	if wantsHelp(args) {
+		_, _ = fmt.Fprint(stdout, usage)
+		return 0
+	}
 	positional, asJSON, err := cli.ParseFlags(args)
 	if err == nil && len(positional) > 0 {
 		err = fmt.Errorf("%w: list takes no arguments", cli.ErrUsage)
@@ -149,6 +163,10 @@ func runList(args []string, stdout, stderr io.Writer) int {
 }
 
 func runShow(args []string, stdout, stderr io.Writer) int {
+	if wantsHelp(args) {
+		_, _ = fmt.Fprint(stdout, usage)
+		return 0
+	}
 	positional, asJSON, err := cli.ParseFlags(args)
 	if err == nil && len(positional) != 1 {
 		err = fmt.Errorf("%w: show takes exactly one host name", cli.ErrUsage)
@@ -167,7 +185,11 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func runExec(args []string, stderr io.Writer) int {
+func runExec(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+		_, _ = fmt.Fprint(stdout, usage)
+		return 0
+	}
 	name, command, err := cli.ParseExec(args)
 	if err != nil {
 		return usageError(stderr, err)

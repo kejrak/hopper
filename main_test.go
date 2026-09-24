@@ -183,6 +183,43 @@ func TestHelp(t *testing.T) {
 	}
 }
 
+func TestSubcommandHelp(t *testing.T) {
+	cases := [][]string{
+		{"list", "--help"},
+		{"list", "-h"},
+		{"show", "--help"},
+		{"show", "web", "-h"},
+		{"exec", "--help"},
+		{"exec", "-h"},
+	}
+	for _, args := range cases {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			code, out, errOut := runArgs(args...)
+			if code != 0 || !strings.Contains(out, "hopper exec") || errOut != "" {
+				t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errOut)
+			}
+		})
+	}
+}
+
+func TestExecHelpAfterHostIsPassedThrough(t *testing.T) {
+	setupHome(t, testConfig)
+	argsFile := fakeSSH(t, 0)
+	code, _, errOut := runArgs("exec", "web", "--", "ls", "--help")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	data, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("ssh stub was not run: %v", err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	want := []string{"web", "ls", "--help"}
+	if !slices.Equal(got[len(got)-3:], want) {
+		t.Fatalf("ssh argv %v, want suffix %v", got, want)
+	}
+}
+
 func TestNoArgsWithoutTerminalExplains(t *testing.T) {
 	setupHome(t, testConfig)
 	orig := isTerminal
@@ -197,8 +234,9 @@ func TestNoArgsWithoutTerminalExplains(t *testing.T) {
 func TestMissingConfigIsRuntimeError(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	code, _, errOut := runArgs("list")
-	if code != 1 || !strings.Contains(errOut, "hopper:") {
-		t.Fatalf("exit %d, stderr %q", code, errOut)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
+	code, out, errOut := runArgs("list")
+	if code != 1 || out != "" || !strings.Contains(errOut, "hopper:") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
 }
