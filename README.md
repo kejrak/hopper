@@ -21,7 +21,7 @@ go install github.com/kejrak/hopper@latest
 
 ## Usage
 
-Run `hopper` in your terminal:
+Run `hopper` in your terminal for the interactive picker:
 
 ```sh
 hopper
@@ -37,6 +37,24 @@ Type to fuzzy-filter, `↑`/`↓` to move, then:
 | `esc` / `ctrl+c` | Quit |
 
 Connection history is stored in a small local state file (`~/.local/state/hopper/history.json` on Linux, platform equivalent elsewhere) to power the RECENT section — delete it any time.
+
+## Scripting and AI agents
+
+AI coding agents (Claude Code, Codex, …) and scripts usually run without a terminal, so they can't drive the TUI. Use the non-interactive subcommands instead:
+
+```sh
+hopper list --json               # every host as JSON (name, user, hostname, port, identity_file, source, group, last_connected)
+hopper show web-prod --json      # one host
+hopper exec web-prod -- uptime   # run a command, no prompts
+```
+
+`hopper exec` only accepts hosts defined in your ssh config and runs `ssh -o BatchMode=yes -T -- <host> <cmd>`, so it fails fast instead of waiting for a password or passphrase (load keys into your ssh-agent first, e.g. with `ctrl+a` in the TUI). It exits with the remote command's exit code (255 when ssh itself fails) and is recorded in RECENT like a normal connection. Errors and warnings go to stderr; stdout carries only the output.
+
+Exit codes: `0` success, `1` error (unknown host, unreadable config), `2` usage error, otherwise the remote/ssh exit code. Running bare `hopper` without a terminal exits `1` with a pointer to these commands.
+
+To let an agent use hopper, add a line like this to your `CLAUDE.md` / `AGENTS.md`:
+
+> SSH hosts: run `hopper list --json` to discover hosts and `hopper exec <host> -- <cmd>` to run commands on them.
 
 ## Configuration
 
