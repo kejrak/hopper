@@ -62,6 +62,8 @@ To let an agent use hopper, add a line like this to your `CLAUDE.md` / `AGENTS.m
 
 A host's group is the name of the ssh config file it is defined in (`~/.ssh/config.d/bizznote` → `bizznote`; hosts in `~/.ssh/config` itself are `default`). Set `HOPPER_ALLOW_GROUPS` to a comma-separated list and `list`, `show` and `exec` only work with those groups: other hosts are left out of `list` and refused by `show`/`exec` (exit 1, with a message naming the host's group). The interactive TUI ignores it.
 
+Define each host in only one config file: if the same name appears in several files, hopper uses the first definition it reads (`~/.ssh/config` first, then included files), which may not be the block ssh itself applies.
+
 Set it where the agent can't change it per call — for example in a project's `.claude/settings.json`, so an agent working in that repository only reaches that project's servers:
 
 ```json
@@ -94,6 +96,8 @@ hopper log --json     # machine-readable
 ```
 
 A run shown as `unfinished` never wrote its end record (still running, or hopper was killed). `hopper log` honours `HOPPER_ALLOW_GROUPS` too. The log is never rotated — delete it any time. Failing to write it is only a warning; the command still runs.
+
+Commands are recorded verbatim, including any secrets in their arguments (for example `mysql -pSECRET`) — keep secrets in environment variables or files on the remote side, not in argv.
 
 ## Configuration
 

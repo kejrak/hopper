@@ -58,6 +58,27 @@ func fakeSSH(t *testing.T, code int) string {
 	return argsFile
 }
 
+// fakeSSHSnapshot installs an ssh stub that copies the audit log to the
+// returned path at the moment ssh is invoked, then exits 0.
+func fakeSSHSnapshot(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stub needs a POSIX shell")
+	}
+	path, err := auditPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	snapshot := filepath.Join(dir, "snapshot")
+	script := fmt.Sprintf("#!/bin/sh\ncp '%s' '%s'\nexit 0\n", path, snapshot)
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return snapshot
+}
+
 func runArgs(args ...string) (code int, stdout, stderr string) {
 	var out, errb bytes.Buffer
 	code = run(args, &out, &errb)
@@ -329,6 +350,47 @@ func TestAllowGroupsExecAllowed(t *testing.T) {
 	}
 	if _, err := os.Stat(argsFile); err != nil {
 		t.Fatalf("ssh stub was not run: %v", err)
+	}
+}
+
+func TestExecAuditStartPrecedesSSH(t *testing.T) {
+	setupHome(t, testConfig)
+	snapshot := fakeSSHSnapshot(t)
+	if code, _, errOut := runArgs("exec", "web", "--", "true"); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	records, err := audit.Load(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Event != audit.EventStart {
+		t.Fatalf("got %+v, want exactly one start record written before ssh ran", records)
+	}
+}
+
+func TestExecGroupRefusalRecordsGroup(t *testing.T) {
+	setupGroupedHome(t)
+	fakeSSH(t, 0)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	if code, _, errOut := runArgs("exec", "web", "--", "true"); code != 1 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	records := loadAudit(t)
+	if len(records) != 1 || records[0].Event != audit.EventRefused || records[0].Group != "default" {
+		t.Fatalf("got %+v, want one refused record with group default", records)
+	}
+
+	_, out, _ := runArgs("log", "--json")
+	if strings.TrimSpace(out) != "[]" {
+		t.Fatalf("log --json with allowlist still work: got %q, want []", out)
+	}
+
+	t.Setenv("HOPPER_ALLOW_GROUPS", "")
+	_, out, _ = runArgs("log", "--json")
+	var runs []map[string]any
+	if err := json.Unmarshal([]byte(out), &runs); err != nil || len(runs) != 1 ||
+		runs[0]["status"] != "refused" || runs[0]["group"] != "default" {
+		t.Fatalf("got %v (%v), want one refused run with group default", runs, err)
 	}
 }
 

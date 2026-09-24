@@ -261,7 +261,7 @@ func TestLogTextFlattensCommand(t *testing.T) {
 	if len(lines) != 4 {
 		t.Fatalf("got %d lines, want header + 3 rows:\n%s", len(lines), b.String())
 	}
-	for _, want := range []string{"TIME", "HOST", "STATUS", "EXIT", "DURATION", "COMMAND"} {
+	for _, want := range []string{"TIME", "HOST", "GROUP", "STATUS", "EXIT", "DURATION", "COMMAND"} {
 		if !strings.Contains(lines[0], want) {
 			t.Errorf("header %q missing %s", lines[0], want)
 		}
@@ -269,11 +269,30 @@ func TestLogTextFlattensCommand(t *testing.T) {
 	if !strings.Contains(lines[1], "web") || !strings.Contains(lines[1], "ok") || !strings.Contains(lines[1], "1.5s") {
 		t.Errorf("row 1 %q", lines[1])
 	}
-	if !strings.Contains(lines[2], "sh -c echo a echo b") {
-		t.Errorf("row 2 should flatten whitespace: %q", lines[2])
+	if !strings.Contains(lines[2], "work") || !strings.Contains(lines[2], "sh -c echo a echo b") {
+		t.Errorf("row 2 should show group and flatten whitespace: %q", lines[2])
 	}
 	if !strings.Contains(lines[3], "refused") || !strings.Contains(lines[3], " - ") {
 		t.Errorf("row 3 should show refused with '-' for exit/duration: %q", lines[3])
+	}
+}
+
+func TestLogTextEscapesControlCharacters(t *testing.T) {
+	runs := []audit.Run{
+		{ID: "e", Time: time.Now(), Host: "x\x1b[1A", Command: []string{"rm", "\x1b[2Kok"}, Status: audit.StatusOK},
+	}
+	var b bytes.Buffer
+	if err := Log(&b, runs, 20, false); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	if strings.ContainsRune(out, '\x1b') {
+		t.Fatalf("output must not contain a raw ESC byte:\n%q", out)
+	}
+	for _, want := range []string{`x\x1b[1A`, `\x1b[2Kok`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing literal %q:\n%s", want, out)
+		}
 	}
 }
 

@@ -257,8 +257,14 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	dir, _ := os.Getwd() // best effort: an empty dir is still a useful record
 	h, err := cli.Resolve(hosts, name, allowedGroups())
 	if err != nil {
+		var group string
+		if errors.Is(err, cli.ErrGroupNotAllowed) {
+			if refused, findErr := cli.Find(hosts, name); findErr == nil {
+				group = refused.Group
+			}
+		}
 		appendAudit(audit.Record{Time: time.Now(), Event: audit.EventRefused, ID: audit.NewID(),
-			Host: name, Command: command, Dir: dir, Reason: err.Error()}, stderr)
+			Host: name, Group: group, Command: command, Dir: dir, Reason: err.Error()}, stderr)
 		_, _ = fmt.Fprintln(stderr, "hopper:", resolveErrorMessage(err))
 		return 1
 	}

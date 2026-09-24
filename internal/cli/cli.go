@@ -12,6 +12,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/kejrak/hopper/internal/audit"
@@ -270,7 +271,7 @@ func Log(w io.Writer, runs []audit.Run, n int, asJSON bool) error {
 	}
 	var b strings.Builder
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "TIME\tHOST\tSTATUS\tEXIT\tDURATION\tCOMMAND")
+	_, _ = fmt.Fprintln(tw, "TIME\tHOST\tGROUP\tSTATUS\tEXIT\tDURATION\tCOMMAND")
 	for _, r := range runs {
 		exit, duration := "-", "-"
 		if r.ExitCode != nil {
@@ -279,8 +280,12 @@ func Log(w io.Writer, runs []audit.Run, n int, asJSON bool) error {
 		if r.DurationMS != nil {
 			duration = (time.Duration(*r.DurationMS) * time.Millisecond).String()
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.Time.Local().Format("2006-01-02 15:04:05"), r.Host, r.Status, exit, duration, displayCommand(r.Command))
+		group := r.Group
+		if group == "" {
+			group = "-"
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.Time.Local().Format("2006-01-02 15:04:05"), printable(r.Host), printable(group), r.Status, exit, duration, displayCommand(r.Command))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -290,12 +295,30 @@ func Log(w io.Writer, runs []audit.Run, n int, asJSON bool) error {
 }
 
 // displayCommand joins argv for the log table, collapsing all whitespace
-// (including newlines from heredoc scripts) and truncating to maxLogCommand
-// runes.
+// (including newlines from heredoc scripts), replacing control and other
+// non-printable runes with a visible escape, and truncating to
+// maxLogCommand runes.
 func displayCommand(command []string) string {
 	s := strings.Join(strings.Fields(strings.Join(command, " ")), " ")
+	s = printable(s)
 	if utf8.RuneCountInString(s) <= maxLogCommand {
 		return s
 	}
 	return string([]rune(s)[:maxLogCommand]) + "…"
+}
+
+// printable replaces control and other non-printable runes with a visible
+// escape (e.g. "\x1b") so agent-supplied strings cannot drive the terminal
+// of the human reading the log.
+func printable(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsPrint(r) {
+			b.WriteRune(r)
+			continue
+		}
+		quoted := strconv.QuoteRuneToASCII(r) // e.g. '\x1b'
+		b.WriteString(quoted[1 : len(quoted)-1])
+	}
+	return b.String()
 }
