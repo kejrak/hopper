@@ -58,6 +58,47 @@ To let an agent use hopper, add a line like this to your `CLAUDE.md` / `AGENTS.m
 
 > SSH hosts: run `hopper list --json` to discover hosts and `hopper exec <host> -- <cmd>` to run commands on them.
 
+### Limiting an agent to some host groups
+
+A host's group is the name of the ssh config file it is defined in (`~/.ssh/config.d/bizznote` → `bizznote`; hosts in `~/.ssh/config` itself are `default`). Set `HOPPER_ALLOW_GROUPS` to a comma-separated list and `list`, `show` and `exec` only work with those groups: other hosts are left out of `list` and refused by `show`/`exec` (exit 1, with a message naming the host's group). The interactive TUI ignores it.
+
+Define each host in only one config file: if the same name appears in several files, hopper uses the first definition it reads (`~/.ssh/config` first, then included files), which may not be the block ssh itself applies.
+
+Set it where the agent can't change it per call — for example in a project's `.claude/settings.json`, so an agent working in that repository only reaches that project's servers:
+
+```json
+{
+  "env": { "HOPPER_ALLOW_GROUPS": "bizznote" },
+  "permissions": {
+    "allow": ["Bash(hopper list:*)", "Bash(hopper show:*)"],
+    "ask": ["Bash(hopper exec:*)"],
+    "deny": ["Bash(ssh:*)", "Bash(scp:*)"]
+  }
+}
+```
+
+The allowlist is a guard rail, not a sandbox: an agent could still run plain `ssh` or prefix the command with its own `HOPPER_ALLOW_GROUPS=…`. The permission rules above close both gaps — raw `ssh` is denied, and a prefixed command no longer matches the allow rules, so you are asked first.
+
+### Exec audit log
+
+Every `hopper exec` is appended to `exec.log` (JSON Lines, file mode 0600) next to hopper's history file:
+
+- a `start` record — time, host, group, command, working directory — written *before* ssh runs, so a run killed by an agent's timeout still shows up,
+- an `end` record with the exit code and duration,
+- a `refused` record for hosts that are unknown or outside `HOPPER_ALLOW_GROUPS`.
+
+Review it with:
+
+```sh
+hopper log            # last 20 runs as a table
+hopper log -n 100     # more
+hopper log --json     # machine-readable
+```
+
+A run shown as `unfinished` never wrote its end record (still running, or hopper was killed). `hopper log` honours `HOPPER_ALLOW_GROUPS` too. The log is never rotated — delete it any time. Failing to write it is only a warning; the command still runs.
+
+Commands are recorded verbatim, including any secrets in their arguments (for example `mysql -pSECRET`) — keep secrets in environment variables or files on the remote side, not in argv.
+
 ## Configuration
 
 `hopper` uses your existing `~/.ssh/config` file. No additional configuration is needed. It will pick up hosts, usernames, ports, and identity files from your SSH config.

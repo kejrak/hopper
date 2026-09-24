@@ -3,6 +3,7 @@ package host
 import (
 	"errors"
 	"os/exec"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -35,6 +36,16 @@ func TestExitCodeMirrorsSSH(t *testing.T) {
 	}
 	if got := ExitCode(errors.New("ssh not found")); got != 1 {
 		t.Fatalf("other error: got %d, want 1", got)
+	}
+}
+
+func TestExitCodeSignalKilled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signals need a POSIX shell")
+	}
+	err := exec.Command("sh", "-c", "kill -9 $$").Run()
+	if got := ExitCode(err); got != 255 {
+		t.Fatalf("signal-killed process: got %d, want 255", got)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/mattn/go-isatty"
 
+	"github.com/kejrak/hopper/internal/audit"
 	"github.com/kejrak/hopper/internal/cli"
 	"github.com/kejrak/hopper/internal/history"
 	"github.com/kejrak/hopper/internal/host"
@@ -32,7 +33,15 @@ Usage:
   hopper exec <host> [--] <cmd>   run a command on a host without prompts
                                   (ssh -o BatchMode=yes -T); exits with the
                                   remote command's code, 255 on ssh errors
+  hopper log [-n N] [--json]      show the last N (default 20) exec runs
   hopper help                     show this help
+
+Environment:
+  HOPPER_ALLOW_GROUPS             comma-separated groups (ssh config file
+                                  names; "default" is ~/.ssh/config) that
+                                  list, show, exec and log may use; unset = all
+
+Every exec is recorded in exec.log next to hopper's history file.
 `
 
 // isTerminal reports whether stdin and stdout are both terminals, which
@@ -43,6 +52,24 @@ var isTerminal = func() bool {
 
 func isTTY(fd uintptr) bool {
 	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
+// allowGroupsEnv names the environment variable holding the group
+// allowlist for the non-interactive commands.
+const allowGroupsEnv = "HOPPER_ALLOW_GROUPS"
+
+// allowedGroups returns the group allowlist; nil allows every group.
+func allowedGroups() map[string]bool {
+	return cli.AllowedGroups(os.Getenv(allowGroupsEnv))
+}
+
+// resolveErrorMessage formats a cli.Resolve error, naming the allowlist
+// when a group restriction (not a typo) refused the host.
+func resolveErrorMessage(err error) string {
+	if errors.Is(err, cli.ErrGroupNotAllowed) {
+		return fmt.Sprintf("%v; %s=%q", err, allowGroupsEnv, os.Getenv(allowGroupsEnv))
+	}
+	return err.Error()
 }
 
 func main() {
@@ -60,6 +87,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runShow(args[1:], stdout, stderr)
 	case "exec":
 		return runExec(args[1:], stdout, stderr)
+	case "log":
+		return runLog(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		_, _ = fmt.Fprint(stdout, usage)
 		return 0
@@ -139,6 +168,28 @@ func recordHistory(name string, stderr io.Writer) {
 	}
 }
 
+// auditPath returns the exec audit log location: exec.log beside the
+// history file.
+func auditPath() (string, error) {
+	historyPath, err := history.Path()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(historyPath), "exec.log"), nil
+}
+
+// appendAudit writes one audit record; failures are only warnings so an
+// unwritable log never blocks a command.
+func appendAudit(r audit.Record, stderr io.Writer) {
+	path, err := auditPath()
+	if err == nil {
+		err = audit.Append(path, r)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "hopper: warning: audit log:", err)
+	}
+}
+
 func runList(args []string, stdout, stderr io.Writer) int {
 	if wantsHelp(args) {
 		_, _ = fmt.Fprint(stdout, usage)
@@ -155,7 +206,7 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
-	if err := cli.List(stdout, hosts, asJSON); err != nil {
+	if err := cli.List(stdout, cli.FilterGroups(hosts, allowedGroups()), asJSON); err != nil {
 		_, _ = fmt.Fprintln(stderr, "hopper:", err)
 		return 1
 	}
@@ -178,7 +229,12 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
-	if err := cli.Show(stdout, hosts, positional[0], asJSON); err != nil {
+	h, err := cli.Resolve(hosts, positional[0], allowedGroups())
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "hopper:", resolveErrorMessage(err))
+		return 1
+	}
+	if err := cli.Show(stdout, h, asJSON); err != nil {
 		_, _ = fmt.Fprintln(stderr, "hopper:", err)
 		return 1
 	}
@@ -198,18 +254,63 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
-	h, err := cli.Find(hosts, name)
+	dir, _ := os.Getwd() // best effort: an empty dir is still a useful record
+	h, err := cli.Resolve(hosts, name, allowedGroups())
 	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "hopper:", err)
+		var group string
+		if errors.Is(err, cli.ErrGroupNotAllowed) {
+			if refused, findErr := cli.Find(hosts, name); findErr == nil {
+				group = refused.Group
+			}
+		}
+		appendAudit(audit.Record{Time: time.Now(), Event: audit.EventRefused, ID: audit.NewID(),
+			Host: name, Group: group, Command: command, Dir: dir, Reason: err.Error()}, stderr)
+		_, _ = fmt.Fprintln(stderr, "hopper:", resolveErrorMessage(err))
 		return 1
 	}
+
+	id := audit.NewID()
+	start := time.Now()
+	appendAudit(audit.Record{Time: start, Event: audit.EventStart, ID: id,
+		Host: h.Name, Group: h.Group, Command: command, Dir: dir}, stderr)
 	recordHistory(h.Name, stderr)
 	err = host.ExecCommand(h.Name, command).Run()
 	var exitErr *exec.ExitError
 	if err != nil && !errors.As(err, &exitErr) {
 		_, _ = fmt.Fprintln(stderr, "hopper:", err) // e.g. ssh binary missing
 	}
-	return host.ExitCode(err)
+	code := host.ExitCode(err)
+	durationMS := time.Since(start).Milliseconds()
+	appendAudit(audit.Record{Time: time.Now(), Event: audit.EventEnd, ID: id,
+		Host: h.Name, ExitCode: &code, DurationMS: &durationMS}, stderr)
+	return code
+}
+
+func runLog(args []string, stdout, stderr io.Writer) int {
+	if wantsHelp(args) {
+		_, _ = fmt.Fprint(stdout, usage)
+		return 0
+	}
+	n, asJSON, err := cli.ParseLog(args)
+	if err != nil {
+		return usageError(stderr, err)
+	}
+	path, err := auditPath()
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "hopper:", err)
+		return 1
+	}
+	records, err := audit.Load(path)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "hopper: reading audit log:", err)
+		return 1
+	}
+	runs := cli.FilterRuns(audit.Runs(records), allowedGroups())
+	if err := cli.Log(stdout, runs, n, asJSON); err != nil {
+		_, _ = fmt.Fprintln(stderr, "hopper:", err)
+		return 1
+	}
+	return 0
 }
 
 func runTUI(stderr io.Writer) int {

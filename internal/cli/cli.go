@@ -8,9 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/kejrak/hopper/internal/audit"
 	"github.com/kejrak/hopper/internal/host"
 )
 
@@ -19,6 +24,10 @@ var ErrUnknownHost = errors.New("unknown host")
 
 // ErrUsage marks a malformed command line; callers exit with code 2.
 var ErrUsage = errors.New("usage")
+
+// ErrGroupNotAllowed is returned when a host exists but its group is not
+// in the allowlist.
+var ErrGroupNotAllowed = errors.New("group not allowed")
 
 // hostJSON is the stable machine-readable shape of a host.
 type hostJSON struct {
@@ -78,12 +87,8 @@ func List(w io.Writer, hosts []host.Host, asJSON bool) error {
 }
 
 // Show writes one host's details as aligned "key: value" lines, or with
-// asJSON a single JSON object. Nothing is written for an unknown host.
-func Show(w io.Writer, hosts []host.Host, name string, asJSON bool) error {
-	h, err := Find(hosts, name)
-	if err != nil {
-		return err
-	}
+// asJSON a single JSON object.
+func Show(w io.Writer, h host.Host, asJSON bool) error {
 	if asJSON {
 		return writeJSON(w, toJSON(h))
 	}
@@ -105,8 +110,55 @@ func Show(w io.Writer, hosts []host.Host, name string, asJSON bool) error {
 	for _, f := range fields {
 		_, _ = fmt.Fprintf(&b, "%-16s%s\n", f[0]+":", f[1])
 	}
-	_, err = io.WriteString(w, b.String())
+	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+// AllowedGroups parses a comma-separated group allowlist such as
+// "bizznote, chutno". It returns nil, meaning every group is allowed,
+// when spec names no group. Matching is exact and case-sensitive.
+func AllowedGroups(spec string) map[string]bool {
+	var allowed map[string]bool
+	for _, group := range strings.Split(spec, ",") {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		if allowed == nil {
+			allowed = make(map[string]bool)
+		}
+		allowed[group] = true
+	}
+	return allowed
+}
+
+// FilterGroups returns the hosts whose group is allowed, in their original
+// order. A nil allowlist allows every host.
+func FilterGroups(hosts []host.Host, allowed map[string]bool) []host.Host {
+	if allowed == nil {
+		return hosts
+	}
+	out := make([]host.Host, 0, len(hosts))
+	for _, h := range hosts {
+		if allowed[h.Group] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// Resolve finds the named host and checks it against the allowlist. The
+// error wraps ErrUnknownHost or ErrGroupNotAllowed; the latter names the
+// host's group so a caller can tell a typo from a restriction.
+func Resolve(hosts []host.Host, name string, allowed map[string]bool) (host.Host, error) {
+	h, err := Find(hosts, name)
+	if err != nil {
+		return host.Host{}, err
+	}
+	if allowed != nil && !allowed[h.Group] {
+		return host.Host{}, fmt.Errorf("%w: host %q is in group %q", ErrGroupNotAllowed, h.Name, h.Group)
+	}
+	return h, nil
 }
 
 func writeJSON(w io.Writer, v any) error {
@@ -150,4 +202,123 @@ func ParseExec(args []string) (name string, command []string, err error) {
 		return "", nil, fmt.Errorf("%w: exec needs a command to run on %q", ErrUsage, name)
 	}
 	return name, command, nil
+}
+
+// DefaultLogRuns is how many runs `hopper log` shows without -n.
+const DefaultLogRuns = 20
+
+// maxLogCommand is the display width, in runes, of a command in the log
+// table; longer commands are truncated with "…" (JSON output keeps them).
+const maxLogCommand = 80
+
+// ParseLog parses log arguments: [-n N] [--json]. N must be a positive
+// integer; anything else is a usage error.
+func ParseLog(args []string) (n int, asJSON bool, err error) {
+	n = DefaultLogRuns
+	for i := 0; i < len(args); i++ {
+		switch arg := args[i]; arg {
+		case "--json", "-json":
+			asJSON = true
+		case "-n":
+			if i+1 >= len(args) {
+				return 0, false, fmt.Errorf("%w: -n needs a number", ErrUsage)
+			}
+			i++
+			v, convErr := strconv.Atoi(args[i])
+			if convErr != nil || v < 1 {
+				return 0, false, fmt.Errorf("%w: -n needs a positive number, got %q", ErrUsage, args[i])
+			}
+			n = v
+		default:
+			return 0, false, fmt.Errorf("%w: unexpected log argument %q", ErrUsage, arg)
+		}
+	}
+	return n, asJSON, nil
+}
+
+// FilterRuns returns the runs whose group is allowed. A nil allowlist
+// keeps every run; runs with no group (e.g. refused unknown hosts) are
+// hidden whenever an allowlist is set.
+func FilterRuns(runs []audit.Run, allowed map[string]bool) []audit.Run {
+	if allowed == nil {
+		return runs
+	}
+	out := make([]audit.Run, 0, len(runs))
+	for _, r := range runs {
+		if allowed[r.Group] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// Log writes the last n runs, oldest first: an aligned table for humans
+// (nothing when there are no runs), or with asJSON a JSON array ("[]" when
+// there are none). The table flattens whitespace in commands and truncates
+// long ones so each run stays on one line.
+func Log(w io.Writer, runs []audit.Run, n int, asJSON bool) error {
+	if len(runs) > n {
+		runs = runs[len(runs)-n:]
+	}
+	if asJSON {
+		if runs == nil {
+			runs = []audit.Run{}
+		}
+		return writeJSON(w, runs)
+	}
+	if len(runs) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "TIME\tHOST\tGROUP\tSTATUS\tEXIT\tDURATION\tCOMMAND")
+	for _, r := range runs {
+		exit, duration := "-", "-"
+		if r.ExitCode != nil {
+			exit = strconv.Itoa(*r.ExitCode)
+		}
+		if r.DurationMS != nil {
+			duration = (time.Duration(*r.DurationMS) * time.Millisecond).String()
+		}
+		group := r.Group
+		if group == "" {
+			group = "-"
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.Time.Local().Format("2006-01-02 15:04:05"), printable(r.Host), printable(group), r.Status, exit, duration, displayCommand(r.Command))
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w, b.String())
+	return err
+}
+
+// displayCommand joins argv for the log table, collapsing all whitespace
+// (including newlines from heredoc scripts), replacing control and other
+// non-printable runes with a visible escape, and truncating to
+// maxLogCommand runes.
+func displayCommand(command []string) string {
+	s := strings.Join(strings.Fields(strings.Join(command, " ")), " ")
+	s = printable(s)
+	if utf8.RuneCountInString(s) <= maxLogCommand {
+		return s
+	}
+	return string([]rune(s)[:maxLogCommand]) + "…"
+}
+
+// printable replaces control and other non-printable runes with a visible
+// escape (e.g. "\x1b") so agent-supplied strings cannot drive the terminal
+// of the human reading the log.
+func printable(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.IsPrint(r) {
+			b.WriteRune(r)
+			continue
+		}
+		quoted := strconv.QuoteRuneToASCII(r) // e.g. '\x1b'
+		b.WriteString(quoted[1 : len(quoted)-1])
+	}
+	return b.String()
 }

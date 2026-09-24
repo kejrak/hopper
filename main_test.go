@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kejrak/hopper/internal/audit"
 	"github.com/kejrak/hopper/internal/history"
 )
 
@@ -24,8 +25,8 @@ Host db
 `
 
 // setupHome points HOME (and the history location) at a temp dir holding
-// an ssh config with the given contents.
-func setupHome(t *testing.T, config string) {
+// an ssh config with the given contents. It returns the temp home dir.
+func setupHome(t *testing.T, config string) string {
 	t.Helper()
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
@@ -37,6 +38,7 @@ func setupHome(t *testing.T, config string) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(home, "state"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+	return home
 }
 
 // fakeSSH puts an ssh stub first on PATH that writes its argv, one per
@@ -54,6 +56,27 @@ func fakeSSH(t *testing.T, code int) string {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argsFile
+}
+
+// fakeSSHSnapshot installs an ssh stub that copies the audit log to the
+// returned path at the moment ssh is invoked, then exits 0.
+func fakeSSHSnapshot(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stub needs a POSIX shell")
+	}
+	path, err := auditPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	snapshot := filepath.Join(dir, "snapshot")
+	script := fmt.Sprintf("#!/bin/sh\ncp '%s' '%s'\nexit 0\n", path, snapshot)
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return snapshot
 }
 
 func runArgs(args ...string) (code int, stdout, stderr string) {
@@ -238,5 +261,280 @@ func TestMissingConfigIsRuntimeError(t *testing.T) {
 	code, out, errOut := runArgs("list")
 	if code != 1 || out != "" || !strings.Contains(errOut, "hopper:") {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
+// groupedConfig defines web in ~/.ssh/config (group "default") and pulls
+// db from ~/.ssh/work (group "work").
+const groupedConfig = `Include work
+
+Host web
+  HostName 10.0.0.1
+`
+
+func setupGroupedHome(t *testing.T) {
+	t.Helper()
+	home := setupHome(t, groupedConfig)
+	if err := os.WriteFile(filepath.Join(home, ".ssh", "work"), []byte("Host db\n  HostName 10.0.0.2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAllowGroupsFiltersList(t *testing.T) {
+	setupGroupedHome(t)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	code, out, errOut := runArgs("list", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	var hosts []map[string]any
+	if err := json.Unmarshal([]byte(out), &hosts); err != nil {
+		t.Fatalf("stdout is not JSON: %q: %v", out, err)
+	}
+	if len(hosts) != 1 || hosts[0]["name"] != "db" {
+		t.Fatalf("got %v, want only db", hosts)
+	}
+}
+
+func TestAllowGroupsUnsetListsAll(t *testing.T) {
+	setupGroupedHome(t)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "")
+	code, out, _ := runArgs("list")
+	if code != 0 || !strings.Contains(out, "web\t") || !strings.Contains(out, "db\t") {
+		t.Fatalf("exit %d, stdout %q", code, out)
+	}
+}
+
+func TestAllowGroupsShowDisallowed(t *testing.T) {
+	setupGroupedHome(t)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	code, out, errOut := runArgs("show", "web")
+	if code != 1 || out != "" {
+		t.Fatalf("exit %d, stdout %q", code, out)
+	}
+	for _, want := range []string{`"web"`, `group "default"`, `HOPPER_ALLOW_GROUPS="work"`} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr %q missing %s", errOut, want)
+		}
+	}
+}
+
+func TestAllowGroupsShowAllowed(t *testing.T) {
+	setupGroupedHome(t)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	code, out, errOut := runArgs("show", "db")
+	if code != 0 || !strings.Contains(out, "10.0.0.2") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+}
+
+func TestAllowGroupsExecDisallowedDoesNotRunSSH(t *testing.T) {
+	setupGroupedHome(t)
+	argsFile := fakeSSH(t, 0)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	code, _, errOut := runArgs("exec", "web", "--", "true")
+	if code != 1 || !strings.Contains(errOut, "group not allowed") {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if _, err := os.Stat(argsFile); !os.IsNotExist(err) {
+		t.Fatal("ssh must not run for a host outside the allowed groups")
+	}
+}
+
+func TestAllowGroupsExecAllowed(t *testing.T) {
+	setupGroupedHome(t)
+	argsFile := fakeSSH(t, 0)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	if code, _, errOut := runArgs("exec", "db", "--", "true"); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if _, err := os.Stat(argsFile); err != nil {
+		t.Fatalf("ssh stub was not run: %v", err)
+	}
+}
+
+func TestExecAuditStartPrecedesSSH(t *testing.T) {
+	setupHome(t, testConfig)
+	snapshot := fakeSSHSnapshot(t)
+	if code, _, errOut := runArgs("exec", "web", "--", "true"); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	records, err := audit.Load(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Event != audit.EventStart {
+		t.Fatalf("got %+v, want exactly one start record written before ssh ran", records)
+	}
+}
+
+func TestExecGroupRefusalRecordsGroup(t *testing.T) {
+	setupGroupedHome(t)
+	fakeSSH(t, 0)
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	if code, _, errOut := runArgs("exec", "web", "--", "true"); code != 1 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	records := loadAudit(t)
+	if len(records) != 1 || records[0].Event != audit.EventRefused || records[0].Group != "default" {
+		t.Fatalf("got %+v, want one refused record with group default", records)
+	}
+
+	_, out, _ := runArgs("log", "--json")
+	if strings.TrimSpace(out) != "[]" {
+		t.Fatalf("log --json with allowlist still work: got %q, want []", out)
+	}
+
+	t.Setenv("HOPPER_ALLOW_GROUPS", "")
+	_, out, _ = runArgs("log", "--json")
+	var runs []map[string]any
+	if err := json.Unmarshal([]byte(out), &runs); err != nil || len(runs) != 1 ||
+		runs[0]["status"] != "refused" || runs[0]["group"] != "default" {
+		t.Fatalf("got %v (%v), want one refused run with group default", runs, err)
+	}
+}
+
+func loadAudit(t *testing.T) []audit.Record {
+	t.Helper()
+	path, err := auditPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := audit.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return records
+}
+
+func TestExecWritesAuditStartAndEnd(t *testing.T) {
+	setupHome(t, testConfig)
+	fakeSSH(t, 7)
+	if code, _, errOut := runArgs("exec", "web", "--", "uptime", "-p"); code != 7 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	records := loadAudit(t)
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want start+end: %+v", len(records), records)
+	}
+	start, end := records[0], records[1]
+	if start.Event != audit.EventStart || start.Host != "web" || start.Group != "default" ||
+		!slices.Equal(start.Command, []string{"uptime", "-p"}) || start.Dir == "" || start.ID == "" {
+		t.Errorf("start record %+v", start)
+	}
+	if end.Event != audit.EventEnd || end.ID != start.ID || end.ExitCode == nil || *end.ExitCode != 7 || end.DurationMS == nil {
+		t.Errorf("end record %+v", end)
+	}
+}
+
+func TestExecRefusedIsAudited(t *testing.T) {
+	setupHome(t, testConfig)
+	fakeSSH(t, 0)
+	if code, _, _ := runArgs("exec", "nope", "--", "true"); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	records := loadAudit(t)
+	if len(records) != 1 || records[0].Event != audit.EventRefused || records[0].Host != "nope" ||
+		!strings.Contains(records[0].Reason, "unknown host") || !slices.Equal(records[0].Command, []string{"true"}) {
+		t.Fatalf("got %+v, want one refused record", records)
+	}
+}
+
+func TestExecUsageErrorIsNotAudited(t *testing.T) {
+	setupHome(t, testConfig)
+	if code, _, _ := runArgs("exec", "web"); code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if records := loadAudit(t); len(records) != 0 {
+		t.Fatalf("usage errors must not be audited: %+v", records)
+	}
+}
+
+func TestExecAuditFailureOnlyWarns(t *testing.T) {
+	setupHome(t, testConfig)
+	argsFile := fakeSSH(t, 5)
+	path, err := auditPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Make exec.log itself a directory so every append fails.
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := runArgs("exec", "web", "--", "true")
+	if code != 5 {
+		t.Fatalf("exit %d, want ssh's 5; stderr %q", code, errOut)
+	}
+	if _, err := os.Stat(argsFile); err != nil {
+		t.Fatal("ssh must still run when the audit log is unwritable")
+	}
+	if !strings.Contains(errOut, "hopper: warning: audit log:") {
+		t.Fatalf("stderr %q, want audit warning", errOut)
+	}
+}
+
+func TestLogJSONAndLimit(t *testing.T) {
+	setupHome(t, testConfig)
+	fakeSSH(t, 0)
+	runArgs("exec", "web", "--", "first")
+	runArgs("exec", "db", "--", "second")
+	code, out, errOut := runArgs("log", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	var runs []map[string]any
+	if err := json.Unmarshal([]byte(out), &runs); err != nil {
+		t.Fatalf("stdout is not JSON: %q: %v", out, err)
+	}
+	if len(runs) != 2 || runs[0]["host"] != "web" || runs[1]["host"] != "db" || runs[1]["status"] != "ok" {
+		t.Fatalf("got %v", runs)
+	}
+	_, out, _ = runArgs("log", "-n", "1", "--json")
+	if err := json.Unmarshal([]byte(out), &runs); err != nil || len(runs) != 1 || runs[0]["host"] != "db" {
+		t.Fatalf("-n 1: got %v (%v)", runs, err)
+	}
+}
+
+func TestLogTextAndEmpty(t *testing.T) {
+	setupHome(t, testConfig)
+	if code, out, _ := runArgs("log"); code != 0 || out != "" {
+		t.Fatalf("empty log: exit %d, stdout %q", code, out)
+	}
+	if code, out, _ := runArgs("log", "--json"); code != 0 || strings.TrimSpace(out) != "[]" {
+		t.Fatalf("empty log json: exit %d, stdout %q", code, out)
+	}
+	fakeSSH(t, 0)
+	runArgs("exec", "web", "--", "uptime")
+	code, out, _ := runArgs("log")
+	if code != 0 || !strings.Contains(out, "HOST") || !strings.Contains(out, "web") || !strings.Contains(out, "uptime") {
+		t.Fatalf("exit %d, stdout %q", code, out)
+	}
+}
+
+func TestLogRespectsAllowGroups(t *testing.T) {
+	setupGroupedHome(t)
+	fakeSSH(t, 0)
+	runArgs("exec", "web", "--", "a")
+	runArgs("exec", "db", "--", "b")
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	_, out, _ := runArgs("log", "--json")
+	var runs []map[string]any
+	if err := json.Unmarshal([]byte(out), &runs); err != nil || len(runs) != 1 || runs[0]["host"] != "db" {
+		t.Fatalf("got %v (%v), want only db", runs, err)
+	}
+}
+
+func TestLogUsage(t *testing.T) {
+	setupHome(t, testConfig)
+	for _, args := range [][]string{{"log", "-n", "0"}, {"log", "extra"}} {
+		if code, _, _ := runArgs(args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+	for _, args := range [][]string{{"log", "--help"}, {"log", "-n", "5", "-h"}} {
+		code, out, errOut := runArgs(args...)
+		if code != 0 || !strings.Contains(out, "hopper log") || errOut != "" {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, out, errOut)
+		}
 	}
 }

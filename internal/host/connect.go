@@ -34,15 +34,18 @@ func ExecCommand(name string, args []string) *exec.Cmd {
 }
 
 // ExitCode maps a Run error to the code hopper should exit with: 0 on
-// success, ssh's own exit code when it exited non-zero, 1 for anything
-// else (e.g. the ssh binary is missing).
+// success, ssh's own exit code when it exited non-zero, 255 when ssh was
+// killed by a signal, 1 for anything else (e.g. the ssh binary is missing).
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode()
+		if code := exitErr.ExitCode(); code >= 0 {
+			return code
+		}
+		return 255
 	}
 	return 1
 }
