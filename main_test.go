@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kejrak/hopper/internal/audit"
 	"github.com/kejrak/hopper/internal/history"
 )
 
@@ -328,5 +329,150 @@ func TestAllowGroupsExecAllowed(t *testing.T) {
 	}
 	if _, err := os.Stat(argsFile); err != nil {
 		t.Fatalf("ssh stub was not run: %v", err)
+	}
+}
+
+func loadAudit(t *testing.T) []audit.Record {
+	t.Helper()
+	path, err := auditPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := audit.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return records
+}
+
+func TestExecWritesAuditStartAndEnd(t *testing.T) {
+	setupHome(t, testConfig)
+	fakeSSH(t, 7)
+	if code, _, errOut := runArgs("exec", "web", "--", "uptime", "-p"); code != 7 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	records := loadAudit(t)
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want start+end: %+v", len(records), records)
+	}
+	start, end := records[0], records[1]
+	if start.Event != audit.EventStart || start.Host != "web" || start.Group != "default" ||
+		!slices.Equal(start.Command, []string{"uptime", "-p"}) || start.Dir == "" || start.ID == "" {
+		t.Errorf("start record %+v", start)
+	}
+	if end.Event != audit.EventEnd || end.ID != start.ID || end.ExitCode == nil || *end.ExitCode != 7 || end.DurationMS == nil {
+		t.Errorf("end record %+v", end)
+	}
+}
+
+func TestExecRefusedIsAudited(t *testing.T) {
+	setupHome(t, testConfig)
+	fakeSSH(t, 0)
+	if code, _, _ := runArgs("exec", "nope", "--", "true"); code != 1 {
+		t.Fatalf("exit %d, want 1", code)
+	}
+	records := loadAudit(t)
+	if len(records) != 1 || records[0].Event != audit.EventRefused || records[0].Host != "nope" ||
+		!strings.Contains(records[0].Reason, "unknown host") || !slices.Equal(records[0].Command, []string{"true"}) {
+		t.Fatalf("got %+v, want one refused record", records)
+	}
+}
+
+func TestExecUsageErrorIsNotAudited(t *testing.T) {
+	setupHome(t, testConfig)
+	if code, _, _ := runArgs("exec", "web"); code != 2 {
+		t.Fatalf("exit %d, want 2", code)
+	}
+	if records := loadAudit(t); len(records) != 0 {
+		t.Fatalf("usage errors must not be audited: %+v", records)
+	}
+}
+
+func TestExecAuditFailureOnlyWarns(t *testing.T) {
+	setupHome(t, testConfig)
+	argsFile := fakeSSH(t, 5)
+	path, err := auditPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Make exec.log itself a directory so every append fails.
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := runArgs("exec", "web", "--", "true")
+	if code != 5 {
+		t.Fatalf("exit %d, want ssh's 5; stderr %q", code, errOut)
+	}
+	if _, err := os.Stat(argsFile); err != nil {
+		t.Fatal("ssh must still run when the audit log is unwritable")
+	}
+	if !strings.Contains(errOut, "hopper: warning: audit log:") {
+		t.Fatalf("stderr %q, want audit warning", errOut)
+	}
+}
+
+func TestLogJSONAndLimit(t *testing.T) {
+	setupHome(t, testConfig)
+	fakeSSH(t, 0)
+	runArgs("exec", "web", "--", "first")
+	runArgs("exec", "db", "--", "second")
+	code, out, errOut := runArgs("log", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	var runs []map[string]any
+	if err := json.Unmarshal([]byte(out), &runs); err != nil {
+		t.Fatalf("stdout is not JSON: %q: %v", out, err)
+	}
+	if len(runs) != 2 || runs[0]["host"] != "web" || runs[1]["host"] != "db" || runs[1]["status"] != "ok" {
+		t.Fatalf("got %v", runs)
+	}
+	_, out, _ = runArgs("log", "-n", "1", "--json")
+	if err := json.Unmarshal([]byte(out), &runs); err != nil || len(runs) != 1 || runs[0]["host"] != "db" {
+		t.Fatalf("-n 1: got %v (%v)", runs, err)
+	}
+}
+
+func TestLogTextAndEmpty(t *testing.T) {
+	setupHome(t, testConfig)
+	if code, out, _ := runArgs("log"); code != 0 || out != "" {
+		t.Fatalf("empty log: exit %d, stdout %q", code, out)
+	}
+	if code, out, _ := runArgs("log", "--json"); code != 0 || strings.TrimSpace(out) != "[]" {
+		t.Fatalf("empty log json: exit %d, stdout %q", code, out)
+	}
+	fakeSSH(t, 0)
+	runArgs("exec", "web", "--", "uptime")
+	code, out, _ := runArgs("log")
+	if code != 0 || !strings.Contains(out, "HOST") || !strings.Contains(out, "web") || !strings.Contains(out, "uptime") {
+		t.Fatalf("exit %d, stdout %q", code, out)
+	}
+}
+
+func TestLogRespectsAllowGroups(t *testing.T) {
+	setupGroupedHome(t)
+	fakeSSH(t, 0)
+	runArgs("exec", "web", "--", "a")
+	runArgs("exec", "db", "--", "b")
+	t.Setenv("HOPPER_ALLOW_GROUPS", "work")
+	_, out, _ := runArgs("log", "--json")
+	var runs []map[string]any
+	if err := json.Unmarshal([]byte(out), &runs); err != nil || len(runs) != 1 || runs[0]["host"] != "db" {
+		t.Fatalf("got %v (%v), want only db", runs, err)
+	}
+}
+
+func TestLogUsage(t *testing.T) {
+	setupHome(t, testConfig)
+	for _, args := range [][]string{{"log", "-n", "0"}, {"log", "extra"}} {
+		if code, _, _ := runArgs(args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+	for _, args := range [][]string{{"log", "--help"}, {"log", "-n", "5", "-h"}} {
+		code, out, errOut := runArgs(args...)
+		if code != 0 || !strings.Contains(out, "hopper log") || errOut != "" {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, out, errOut)
+		}
 	}
 }

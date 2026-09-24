@@ -77,6 +77,24 @@ Set it where the agent can't change it per call — for example in a project's `
 
 The allowlist is a guard rail, not a sandbox: an agent could still run plain `ssh` or prefix the command with its own `HOPPER_ALLOW_GROUPS=…`. The permission rules above close both gaps — raw `ssh` is denied, and a prefixed command no longer matches the allow rules, so you are asked first.
 
+### Exec audit log
+
+Every `hopper exec` is appended to `exec.log` (JSON Lines, file mode 0600) next to hopper's history file:
+
+- a `start` record — time, host, group, command, working directory — written *before* ssh runs, so a run killed by an agent's timeout still shows up,
+- an `end` record with the exit code and duration,
+- a `refused` record for hosts that are unknown or outside `HOPPER_ALLOW_GROUPS`.
+
+Review it with:
+
+```sh
+hopper log            # last 20 runs as a table
+hopper log -n 100     # more
+hopper log --json     # machine-readable
+```
+
+A run shown as `unfinished` never wrote its end record (still running, or hopper was killed). `hopper log` honours `HOPPER_ALLOW_GROUPS` too. The log is never rotated — delete it any time. Failing to write it is only a warning; the command still runs.
+
 ## Configuration
 
 `hopper` uses your existing `~/.ssh/config` file. No additional configuration is needed. It will pick up hosts, usernames, ports, and identity files from your SSH config.
